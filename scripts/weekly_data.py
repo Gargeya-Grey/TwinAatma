@@ -7,7 +7,7 @@ from pathlib import Path
 VAULT_DIR = Path(__file__).resolve().parent.parent
 DB = VAULT_DIR / "knowledge_index.db"
 since = (date.today() - timedelta(days=7)).isoformat()
-conn = sqlite3.connect(DB)
+conn = sqlite3.connect(DB, timeout=30.0)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 def one(sql, params=()): return cur.execute(sql, params).fetchone()[0]

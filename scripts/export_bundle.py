@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import shutil
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -59,12 +60,17 @@ def select_notes(project: str | None, paths: list[str]):
             if fm.get("project", "").lower() == project.lower() or project.lower() in fm.get("tags", "").lower():
                 selected.add(p)
     for item in paths:
-        p = (VAULT_DIR / item).resolve()
-        if p.is_dir():
-            for md in p.rglob("*.md"):
-                selected.add(md)
-        elif p.exists() and p.suffix.lower() == ".md":
-            selected.add(p)
+        try:
+            p = (VAULT_DIR / item).resolve()
+            p.relative_to(VAULT_DIR)
+            if p.is_dir():
+                for md in p.rglob("*.md"):
+                    selected.add(md)
+            elif p.exists() and p.suffix.lower() == ".md":
+                selected.add(p)
+        except (ValueError, FileNotFoundError):
+            print(f"[WARNING] Skipping invalid or traversal path: {item}", file=sys.stderr)
+            continue
     return sorted(selected)
 
 
@@ -79,6 +85,11 @@ def main():
         ap.error("Provide --project and/or --paths")
 
     out = (VAULT_DIR / args.out).resolve()
+    # Safety Check: Prevent deleting vault root or system parents
+    if out == VAULT_DIR or out in VAULT_DIR.parents or not str(out).startswith(str(VAULT_DIR)):
+        print(f"[ERROR] Destructive export target path: output folder cannot be the vault root, system folders, or outside the vault workspace.", file=sys.stderr)
+        sys.exit(1)
+
     if out.exists():
         shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)

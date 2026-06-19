@@ -9,7 +9,7 @@ query = " ".join(sys.argv[1:]).strip()
 if not query:
     print("Usage: python scripts/search.py <search query>")
     raise SystemExit(1)
-conn = sqlite3.connect(DB)
+conn = sqlite3.connect(DB, timeout=30.0)
 cur = conn.cursor()
 like = f"%{query}%"
 print("=== KnowledgeOS Search ===")

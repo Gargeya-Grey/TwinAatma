@@ -8,7 +8,7 @@ items=[]
 for p in inbox.rglob('*.md'):
     if p.name=='_Index.md': continue
     text=p.read_text(encoding='utf-8',errors='replace')
-    links=re.findall(r'\[\[[^\]]+\]\]',text)
+    links=re.findall(r'\[\[[^\]]+\]\]',text) or re.findall(r'\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)',text)
     kind='research'
     low=text.lower()
     if 'decision' in low: kind='decision'
