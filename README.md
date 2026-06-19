@@ -42,8 +42,11 @@ To get KnowledgeOS running, perform the following manual steps:
      python scripts/rebuild_index.py
      ```
 3. **Configure Your Ego Node (Self-Model)**:
-   - Open the [People/Self.md](People/Self.md) file in Obsidian.
-   - **Manually update** the templates for your core values, operational rules, heuristics, and anti-goals. The AI Brain references this node to understand your operational style.
+   - Run the cognitive onboarding wizard in your terminal:
+     ```bash
+     python scripts/onboarding.py
+     ```
+   - This interactive CLI wizard will capture your heuristics, core values, and anti-goals to automatically generate your baseline profile at [People/Self.md](People/Self.md). You can also edit this file manually.
 4. **Environment Configuration (Optional Notion Sync)**:
    - If you want to use the Notion publishing bridge, create a `.env` file at `~/.hermes/.env` (on Unix/macOS) or in your `%LOCALAPPDATA%/hermes/.env` folder (on Windows) and add your integration details:
      ```env
