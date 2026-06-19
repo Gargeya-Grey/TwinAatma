@@ -43,11 +43,14 @@ Capture → Clarify → Connect → Commit → Execute → Review → Synthesize
 ## Automation Commands
 | Command | Purpose |
 |---|---|
+| `python scripts/doctor.py` | Run diagnostic environment checks |
 | `python scripts/rebuild_index.py` | Rebuild SQLite index |
 | `python scripts/search.py "query"` | Search vault |
 | `python scripts/weekly_data.py` | Weekly metrics |
 | `python scripts/daily_capture_report.py` | Inbox processing report |
 | `python scripts/refinement_report.py` | Refinement candidates |
+| `python scripts/validate_schema.py` | Validate schema health |
+| `python scripts/refactor_links.py` | Auto refactor links |
 | `python scripts/update_mocs.py` | Refresh generated dashboards |
 | `python scripts/draft_weekly_synthesis.py` | Draft weekly synthesis |
 
