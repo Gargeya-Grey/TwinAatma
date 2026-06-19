@@ -24,18 +24,18 @@ Instead of keeping ideas in memory, browser tabs, chats, random docs, or vague p
 
 | Kind of thought | Where it goes |
 |---|---|
-| Raw idea | [[../Inbox/_Index|Inbox]] |
-| Reusable idea or mental model | [[../Concepts/_Index|Concepts]] |
-| Startup/product work | [[../Projects/_Index|Projects]] and [[_MOC_Startup|Startup MOC]] |
-| Research or article notes | [[../Research/_Index|Research]] |
-| Important choice | [[../Decisions/_Index|Decisions]] |
-| Hypothesis to test | [[_MOC_Experiments|Experiments Dashboard]] |
-| Weekly reflection | [[../Research/Synthesis/2026-06-18-weekly-draft|Weekly Synthesis]] |
+| Raw idea | [Inbox](../Inbox/_Index.md) |
+| Reusable idea or mental model | [Concepts](../Concepts/_Index.md) |
+| Startup/product work | [Projects](../Projects/_Index.md) and [Startup MOC](_MOC_Startup.md) |
+| Research or article notes | [Research](../Research/_Index.md) |
+| Important choice | [Decisions](../Decisions/_Index.md) |
+| Hypothesis to test | [Experiments Dashboard](_MOC_Experiments.md) |
+| Weekly reflection | [Weekly Synthesis](../Research/Synthesis/example-synthesis.md) |
 
 ### 2. It is not locked into one app
 The durable source of truth is plain markdown files with YAML frontmatter. Obsidian is the editor, but the knowledge itself is portable.
 
-This is why the system follows the [[../Research/knowledgeos-portable-schema|KnowledgeOS Portable Schema]].
+This is why the system follows the [KnowledgeOS Portable Schema](../Research/knowledgeos-portable-schema.md).
 
 ### 3. It supports both human navigation and AI use
 Humans use MOCs and links. Hermes uses frontmatter, search, SQLite indexing, validation scripts, and export scripts.
@@ -94,16 +94,16 @@ Important MOCs:
 
 | MOC | Purpose |
 |---|---|
-| [[_MOC_Master|Master MOC]] | Root navigation for the whole vault |
-| [[_MOC_Active|Active Work MOC]] | What matters right now |
-| [[_MOC_Startup|Startup MOC]] | Startup/product/venture strategy |
-| [[_MOC_KnowledgeOS|KnowledgeOS MOC]] | How the system itself works |
-| [[_MOC_Execution_System|Execution System MOC]] | Obsidian/Notion/Hermes role boundaries |
-| [[_MOC_Experiments|Experiments Dashboard]] | Active experiments and their state |
-| [[_MOC_Learning|Learning MOC]] | Learning paths, books, papers, practice |
-| [[_MOC_Ecosystem|Ecosystem MOC]] | Cross-domain connections |
+| [Master MOC](_MOC_Master.md) | Root navigation for the whole vault |
+| [Active Work MOC](_MOC_Active.md) | What matters right now |
+| [Startup MOC](_MOC_Startup.md) | Startup/product/venture strategy |
+| [KnowledgeOS MOC](_MOC_KnowledgeOS.md) | How the system itself works |
+| [Execution System MOC](_MOC_Execution_System.md) | Obsidian/Notion/Hermes role boundaries |
+| [Experiments Dashboard](_MOC_Experiments.md) | Active experiments and their state |
+| [Learning MOC](_MOC_Learning.md) | Learning paths, books, papers, practice |
+| [Ecosystem MOC](_MOC_Ecosystem.md) | Cross-domain connections |
 
-How to use them: start from [[_MOC_Master|Master MOC]], then follow the relevant domain MOC.
+How to use them: start from [Master MOC](_MOC_Master.md), then follow the relevant domain MOC.
 
 ### 2. Typed Notes
 Each note has a type. This prevents the vault from becoming a pile of generic notes.
@@ -142,8 +142,8 @@ This metadata helps both you and Hermes understand what the note is.
 Obsidian wikilinks connect notes:
 
 ```text
-[[../Projects/example-project|Example Project]]
-[[../Decisions/okf-inspired-portable-knowledge-schema|OKF-Inspired Portable Knowledge Schema]]
+[Example Project](../Projects/example-project.md)
+[OKF-Inspired Portable Knowledge Schema](../Decisions/okf-inspired-portable-knowledge-schema.md)
 ```
 
 The graph is real, not just decorative. But the recommended navigation style is:
@@ -174,7 +174,7 @@ Scripts keep the vault operational:
 ## How to Use It Day to Day
 
 ### Daily Use — 5 to 15 minutes
-1. Put raw thoughts into [[../Inbox/_Index|Inbox]].
+1. Put raw thoughts into [Inbox](../Inbox/_Index.md).
 2. Run or ask Hermes to run:
    ```bash
    python scripts/daily_capture_report.py
@@ -206,7 +206,7 @@ Scripts keep the vault operational:
 5. Update active projects/experiments.
 
 ### Monthly Use — 60 to 120 minutes
-1. Use [[../Templates/t-monthly-review|Monthly Review Template]].
+1. Use [Monthly Review Template](../Templates/t-monthly-review.md).
 2. Archive stale projects.
 3. Revisit project thesis and assumptions.
 4. Update learning roadmap.
@@ -219,7 +219,7 @@ Example: you read an article about AI assessment.
 1. Create a source note in Research.
 2. Add metadata: `resource`, `source_type`, `timestamp`, tags, project.
 3. Summarize claims and evidence.
-4. Link it to [[_MOC_Startup|Startup MOC]] and [[../Projects/example-project|Example Project]].
+4. Link it to [Startup MOC](_MOC_Startup.md) and [Example Project](../Projects/example-project.md).
 5. If it changes strategy, create a decision note.
 6. If it creates a testable assumption, create an experiment.
 7. In weekly synthesis, decide what action follows.
@@ -294,9 +294,9 @@ A good KnowledgeOS note should eventually connect to at least one of:
 That is what turns the vault from a passive archive into an active thinking system.
 
 ## Related Notes
-- [[../README|KnowledgeOS README]]
-- [[_MOC_Master|Master MOC]]
-- [[_MOC_KnowledgeOS|KnowledgeOS MOC]]
-- [[_MOC_Execution_System|Execution System MOC]]
-- [[../Research/knowledgeos-portable-schema|KnowledgeOS Portable Schema]]
-- [[../Decisions/okf-inspired-portable-knowledge-schema|OKF-Inspired Portable Knowledge Schema]]
+- [KnowledgeOS README](../README.md)
+- [Master MOC](_MOC_Master.md)
+- [KnowledgeOS MOC](_MOC_KnowledgeOS.md)
+- [Execution System MOC](_MOC_Execution_System.md)
+- [KnowledgeOS Portable Schema](../Research/knowledgeos-portable-schema.md)
+- [OKF-Inspired Portable Knowledge Schema](../Decisions/okf-inspired-portable-knowledge-schema.md)
