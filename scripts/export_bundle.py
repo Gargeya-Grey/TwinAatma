@@ -2,8 +2,8 @@
 """Export a portable KnowledgeOS markdown bundle.
 
 Examples:
-  python scripts/export_bundle.py --project Edudojo --out exports/edudojo-bundle
-  python scripts/export_bundle.py --paths Projects Research/edudojo-assumption-map.md --out exports/custom
+  python scripts/export_bundle.py --project Example --out exports/example-bundle
+  python scripts/export_bundle.py --paths Projects Research/example-concept.md --out exports/custom
 
 The output is just markdown files plus a manifest.json. The source of truth
 remains the vault; this script creates a portable consumer bundle.
