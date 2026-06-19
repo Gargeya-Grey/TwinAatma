@@ -1,5 +1,8 @@
 ---
 type: moc
+title: Experiments Dashboard
+description: Map of Content for active and completed experiments.
+schema: knowledgeos-v0.2
 status: active
 tags: [moc, experiments, dashboard]
 created: 2026-06-19

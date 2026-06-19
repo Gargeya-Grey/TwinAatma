@@ -8,12 +8,13 @@ vault portable and agent-readable.
 from __future__ import annotations
 import json
 import re
+import urllib.parse
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)")
 
 REQUIRED = ["type", "title", "description", "status", "schema", "created", "updated", "tags"]
 RECOMMENDED_FOR_SOURCE = ["resource", "timestamp", "source_type"]
@@ -60,7 +61,7 @@ def main() -> int:
             links.append(raw)
         for raw in MARKDOWN_LINK_RE.findall(text):
             if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#")):
-                links.append(raw)
+                links.append(urllib.parse.unquote(raw))
                 
         if not fm:
             errors.append({"path": rel, "issue": "missing_frontmatter"})
@@ -70,7 +71,7 @@ def main() -> int:
         if is_template(path):
             missing = [k for k in missing if k not in {"description"}]
         if missing:
-            warnings.append({"path": rel, "issue": "missing_required_fields", "fields": missing})
+            errors.append({"path": rel, "issue": "missing_required_fields", "fields": missing})
         if not links and not is_index_or_moc(fm) and not is_template(path):
             warnings.append({"path": rel, "issue": "no_links"})
         sourceish = bool(fm.get("source_type") or fm.get("resource"))

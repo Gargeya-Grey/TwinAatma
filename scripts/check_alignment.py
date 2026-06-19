@@ -18,7 +18,7 @@ def main():
         print(f"Index database not found at {DB}. Please run python scripts/rebuild_index.py first.")
         sys.exit(1)
 
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB, timeout=30.0)
     cur = conn.cursor()
 
     # 1. Fetch decisions (excluding templates)

@@ -4,7 +4,7 @@ from pathlib import Path
 import re, sqlite3, json
 VAULT=Path(__file__).resolve().parent.parent
 DB=VAULT/'knowledge_index.db'
-conn=sqlite3.connect(DB); conn.row_factory=sqlite3.Row
+conn=sqlite3.connect(DB, timeout=30.0); conn.row_factory=sqlite3.Row
 rows=conn.execute("select * from notes where path not like 'Templates/%' order by updated desc, path").fetchall()
 report={"ready_candidates":[],"needs_links":[],"placeholders":[],"active_without_next_actions":[]}
 for r in rows:

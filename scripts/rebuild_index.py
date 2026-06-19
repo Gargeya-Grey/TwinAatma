@@ -5,7 +5,7 @@ Indexes markdown notes, frontmatter, and wiki links. Link targets are stored in 
 form and normalized to best-effort vault-relative markdown paths when possible.
 """
 from __future__ import annotations
-import hashlib, os, re, sqlite3, sys
+import hashlib, os, re, sqlite3, sys, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -13,7 +13,7 @@ VAULT_DIR = Path(__file__).resolve().parent.parent
 DB = VAULT_DIR / "knowledge_index.db"
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)")
 
 def parse_frontmatter(text: str) -> dict:
     m = FRONTMATTER_RE.match(text)
@@ -49,7 +49,7 @@ def build_note_lookup(md_files):
     return lookup
 
 def normalize_link(raw: str, source_rel: str, lookup: dict) -> str:
-    target = raw.split("|", 1)[0].split("#", 1)[0].strip()
+    target = urllib.parse.unquote(raw.split("|", 1)[0].split("#", 1)[0].strip())
     if not target:
         return raw.strip()
     target = target.replace("\\", "/")
@@ -113,7 +113,7 @@ def process_file_worker(args):
 def main():
     md_files = [p for p in VAULT_DIR.rglob("*.md") if ".git" not in p.parts and "node_modules" not in p.parts]
     lookup = build_note_lookup(md_files)
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB, timeout=30.0)
     cur = conn.cursor()
     cur.executescript("""
     CREATE TABLE IF NOT EXISTS notes (

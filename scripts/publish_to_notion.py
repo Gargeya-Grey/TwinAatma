@@ -120,7 +120,7 @@ def publish_note(filepath, dry_run=False):
     
     posix_rel_path = rel_path.replace('\\', '/')
     vault_name = os.path.basename(VAULT_DIR)
-    obsidian_link = f"obsidian://open?vault={urllib.parse.quote(vault_name)}&file={urllib.parse.quote(posix_rel_path)}"
+    obsidian_link = f"obsidian://open?vault={urllib.parse.quote(vault_name)}&file={urllib.parse.quote(posix_rel_path, safe='/')}"
     
     body_summary = body.strip()[:2000] if body else ''
     
@@ -165,9 +165,17 @@ def publish_note(filepath, dry_run=False):
         print(f"  Source: {obsidian_link}")
         return True
     except urllib.error.HTTPError as e:
-        error_body = e.read().decode()
+        error_body = e.read().decode() if hasattr(e, 'read') else str(e)
         print(f"FAILED: {rel_path}")
-        print(f"  Error {e.code}: {error_body[:300]}")
+        print(f"  HTTP Error {e.code}: {error_body[:300]}")
+        return False
+    except urllib.error.URLError as e:
+        print(f"FAILED: {rel_path}")
+        print(f"  Network/DNS Error: {e.reason}")
+        return False
+    except Exception as e:
+        print(f"FAILED: {rel_path}")
+        print(f"  Unexpected error: {str(e)}")
         return False
 
 if __name__ == '__main__':
