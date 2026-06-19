@@ -6,6 +6,7 @@ form and normalized to best-effort vault-relative markdown paths when possible.
 """
 from __future__ import annotations
 import hashlib, os, re, sqlite3, sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
@@ -67,6 +68,48 @@ def normalize_link(raw: str, source_rel: str, lookup: dict) -> str:
             return hit
     return target
 
+def process_file_worker(args):
+    path, db_notes, lookup = args
+    try:
+        rel = path.relative_to(VAULT_DIR).as_posix()
+        text = path.read_text(encoding="utf-8", errors="replace")
+        file_hash = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+        
+        # Cache hit check
+        if rel in db_notes and db_notes[rel] == file_hash:
+            return (rel, file_hash, True, None)
+            
+        # Parse note data
+        fm = parse_frontmatter(text)
+        title = title_from_note(path, text, fm)
+        typ = fm.get("type") or "concept"
+        status = fm.get("status") or "draft"
+        tags = fm.get("tags") or ""
+        project = fm.get("project") or ""
+        created = fm.get("created") or ""
+        updated = fm.get("updated") or ""
+        description = fm.get("description") or ""
+        resource = fm.get("resource") or ""
+        timestamp = fm.get("timestamp") or ""
+        schema = fm.get("schema") or ""
+        
+        raw_links = []
+        for raw in WIKILINK_RE.findall(text):
+            raw_links.append(raw)
+        for raw in MARKDOWN_LINK_RE.findall(text):
+            if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#")):
+                raw_links.append(raw)
+                
+        resolved_links = []
+        for raw in sorted(set(raw_links)):
+            dest = normalize_link(raw, rel, lookup)
+            resolved_links.append((dest, raw))
+            
+        note_data = (title, rel, typ, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash)
+        return (rel, file_hash, False, (note_data, resolved_links))
+    except Exception as e:
+        return (str(path), "", False, e)
+
 def main():
     md_files = [p for p in VAULT_DIR.rglob("*.md") if ".git" not in p.parts and "node_modules" not in p.parts]
     lookup = build_note_lookup(md_files)
@@ -120,56 +163,35 @@ def main():
             cur.execute("DELETE FROM links WHERE source = ?", (path,))
 
     note_count = link_count = 0
-    for path in md_files:
-        rel = path.relative_to(VAULT_DIR).as_posix()
-        text = path.read_text(encoding="utf-8", errors="replace")
-        file_hash = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
-        
-        # If file matches path and hash in DB, skip parsing it!
-        # Re-normalize existing links in case destinations were renamed.
-        if rel in db_notes and db_notes[rel] == file_hash:
+    
+    # Process files concurrently using a ThreadPoolExecutor
+    worker_args = [(p, db_notes, lookup) for p in md_files]
+    with ThreadPoolExecutor() as executor:
+        results = list(executor.map(process_file_worker, worker_args))
+
+    for rel, file_hash, is_cached, payload in results:
+        if isinstance(payload, Exception):
+            print(f"Error processing {rel}: {payload}", file=sys.stderr)
+            continue
+            
+        if is_cached:
             note_count += 1
             existing_links = cur.execute("SELECT raw_destination, id FROM links WHERE source = ?", (rel,)).fetchall()
             for raw, link_id in existing_links:
                 dest = normalize_link(raw, rel, lookup)
                 cur.execute("UPDATE links SET destination = ? WHERE id = ?", (dest, link_id))
                 link_count += 1
-            continue
+        else:
+            note_data, resolved_links = payload
+            cur.execute("DELETE FROM links WHERE source = ?", (rel,))
+            cur.execute("""INSERT OR REPLACE INTO notes
+              (title, path, type, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", note_data)
+            note_count += 1
+            for dest, raw in resolved_links:
+                cur.execute("INSERT INTO links (source, destination, raw_destination) VALUES (?, ?, ?)", (rel, dest, raw))
+                link_count += 1
 
-        # Otherwise parse the file
-        fm = parse_frontmatter(text)
-        title = title_from_note(path, text, fm)
-        typ = fm.get("type") or "concept"
-        status = fm.get("status") or "draft"
-        tags = fm.get("tags") or ""
-        project = fm.get("project") or ""
-        created = fm.get("created") or ""
-        updated = fm.get("updated") or ""
-        description = fm.get("description") or ""
-        resource = fm.get("resource") or ""
-        timestamp = fm.get("timestamp") or ""
-        schema = fm.get("schema") or ""
-
-        # Clear existing links for this source note before inserting new ones
-        cur.execute("DELETE FROM links WHERE source = ?", (rel,))
-
-        cur.execute("""INSERT OR REPLACE INTO notes
-          (title, path, type, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-          (title, rel, typ, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash))
-        note_count += 1
-        
-        raw_links = []
-        for raw in WIKILINK_RE.findall(text):
-            raw_links.append(raw)
-        for raw in MARKDOWN_LINK_RE.findall(text):
-            # Skip external web and mail links, and internal headers
-            if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#")):
-                raw_links.append(raw)
-        for raw in sorted(set(raw_links)):
-            dest = normalize_link(raw, rel, lookup)
-            cur.execute("INSERT INTO links (source, destination, raw_destination) VALUES (?, ?, ?)", (rel, dest, raw))
-            link_count += 1
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_rebuild_note_count', ?)", (str(note_count),))
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_rebuild_link_count', ?)", (str(link_count),))
     conn.commit()

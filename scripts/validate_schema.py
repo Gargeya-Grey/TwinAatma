@@ -13,6 +13,7 @@ from pathlib import Path
 VAULT_DIR = Path(__file__).resolve().parent.parent
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 
 REQUIRED = ["type", "title", "description", "status", "schema", "created", "updated", "tags"]
 RECOMMENDED_FOR_SOURCE = ["resource", "timestamp", "source_type"]
@@ -48,10 +49,19 @@ def main() -> int:
     for path in VAULT_DIR.rglob("*.md"):
         if any(part in SKIP_DIRS for part in path.parts):
             continue
+        if path.name.lower() == "readme.md" and path.parent == VAULT_DIR:
+            continue
         rel = path.relative_to(VAULT_DIR).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         fm = parse_frontmatter(text)
-        links = WIKILINK_RE.findall(text)
+        
+        links = []
+        for raw in WIKILINK_RE.findall(text):
+            links.append(raw)
+        for raw in MARKDOWN_LINK_RE.findall(text):
+            if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#")):
+                links.append(raw)
+                
         if not fm:
             errors.append({"path": rel, "issue": "missing_frontmatter"})
             continue
@@ -62,7 +72,7 @@ def main() -> int:
         if missing:
             warnings.append({"path": rel, "issue": "missing_required_fields", "fields": missing})
         if not links and not is_index_or_moc(fm) and not is_template(path):
-            warnings.append({"path": rel, "issue": "no_wikilinks"})
+            warnings.append({"path": rel, "issue": "no_links"})
         sourceish = bool(fm.get("source_type") or fm.get("resource"))
         if sourceish and not is_template(path):
             missing_source = [k for k in RECOMMENDED_FOR_SOURCE if not fm.get(k)]

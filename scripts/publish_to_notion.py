@@ -11,7 +11,7 @@ Only publishes notes with frontmatter containing:
   status: refined
   publish_to_notion: true
 """
-import json, os, re, sys, urllib.request, urllib.error
+import json, os, re, sys, urllib.request, urllib.error, urllib.parse
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _notion_env
 
@@ -118,7 +118,9 @@ def publish_note(filepath, dry_run=False):
     
     note_type = fm.get('type', 'concept')
     
-    obsidian_link = f"obsidian://open?vault=work-notes&file=KnowledgeOS%2F{rel_path.replace('/', '%2F')}"
+    posix_rel_path = rel_path.replace('\\', '/')
+    vault_name = os.path.basename(VAULT_DIR)
+    obsidian_link = f"obsidian://open?vault={urllib.parse.quote(vault_name)}&file={urllib.parse.quote(posix_rel_path)}"
     
     body_summary = body.strip()[:2000] if body else ''
     
@@ -178,13 +180,20 @@ if __name__ == '__main__':
     files = [a for a in sys.argv[1:] if not a.startswith('--')]
     
     if all_mode:
-        import subprocess
-        result = subprocess.run(
-            ['sqlite3', os.path.join(VAULT_DIR, 'knowledge_index.db'),
-             "SELECT path FROM notes WHERE status='refined'"],
-            capture_output=True, text=True
-        )
-        files = [os.path.join(VAULT_DIR, p.strip()) for p in result.stdout.strip().split('\n') if p.strip()]
+        db_path = os.path.join(VAULT_DIR, 'knowledge_index.db')
+        if not os.path.exists(db_path):
+            print(f"Error: {db_path} not found. Please run python scripts/rebuild_index.py first.")
+            sys.exit(1)
+        import sqlite3
+        try:
+            conn = sqlite3.connect(db_path)
+            cur = conn.cursor()
+            rows = cur.execute("SELECT path FROM notes WHERE status='refined'").fetchall()
+            files = [os.path.join(VAULT_DIR, r[0]) for r in rows]
+            conn.close()
+        except Exception as e:
+            print(f"Error querying database: {e}")
+            sys.exit(1)
         if not files or files == [os.path.join(VAULT_DIR, '')]:
             print("No refined notes found. Mark notes with status=refined and publish_to_notion=true")
             sys.exit(0)
