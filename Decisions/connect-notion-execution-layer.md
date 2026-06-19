@@ -15,7 +15,7 @@ timestamp: 2026-06-18T00:00:00Z
 
 ## Context
 
-The [KnowledgeOS](README.md) was built with three layers: Obsidian (thinking), Notion (execution), and Hermes (orchestrator). Notion was the missing piece — the refined knowledge had no destination. The existing ["Idea Vault & Execution Engine"](../_MOC_Master.md) database in Notion already contained the user's strategic goals, projects, and action items. The gap was bridging Obsidian notes → Notion pages automatically.
+The [KnowledgeOS](../README.md) was built with three layers: Obsidian (thinking), Notion (execution), and Hermes (orchestrator). Notion was the missing piece — the refined knowledge had no destination. The existing ["Idea Vault & Execution Engine"](../MOCs/_MOC_Master.md) database in Notion already contained the user's strategic goals, projects, and action items. The gap was bridging Obsidian notes → Notion pages automatically.
 
 ## Alternatives Considered
 

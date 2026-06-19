@@ -42,17 +42,32 @@ def parse_frontmatter(content):
     body = m.group(2)
     
     fm = {}
-    for line in yaml_text.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#'):
+    lines = yaml_text.split('\n')
+    current_key = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue
+        if stripped.startswith('-') and current_key:
+            val = stripped[1:].strip().strip('"').strip("'")
+            if current_key in fm:
+                if isinstance(fm[current_key], list):
+                    fm[current_key].append(val)
+                elif fm[current_key] == "":
+                    fm[current_key] = [val]
+                else:
+                    fm[current_key] = [fm[current_key], val]
+            else:
+                fm[current_key] = [val]
             continue
         if ':' in line:
             key, _, val = line.partition(':')
             key = key.strip()
             val = val.strip().strip('"').strip("'")
             if val.startswith('[') and val.endswith(']'):
-                val = [v.strip() for v in val[1:-1].split(',') if v.strip()]
+                val = [v.strip().strip('"').strip("'") for v in val[1:-1].split(',') if v.strip()]
             fm[key] = val
+            current_key = key
     return fm, body
 
 def publish_note(filepath, dry_run=False):

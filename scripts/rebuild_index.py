@@ -20,13 +20,32 @@ def parse_frontmatter(text: str) -> dict:
     if not m:
         return {}
     data = {}
-    for raw in m.group(1).splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or ":" not in line:
+    lines = m.group(1).splitlines()
+    current_key = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        key, val = line.split(":", 1)
-        val = val.strip().strip('"').strip("'")
-        data[key.strip().lower()] = val
+        if stripped.startswith("-") and current_key:
+            val = stripped[1:].strip().strip('"').strip("'")
+            if current_key in data:
+                if isinstance(data[current_key], list):
+                    data[current_key].append(val)
+                elif data[current_key] == "":
+                    data[current_key] = [val]
+                else:
+                    data[current_key] = [data[current_key], val]
+            else:
+                data[current_key] = [val]
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            k = k.strip().lower()
+            v = v.strip().strip('"').strip("'")
+            if v.startswith("[") and v.endswith("]"):
+                v = [item.strip().strip('"').strip("'") for item in v[1:-1].split(",") if item.strip()]
+            data[k] = v
+            current_key = k
     return data
 
 def title_from_note(path: Path, text: str, fm: dict) -> str:
@@ -85,7 +104,11 @@ def process_file_worker(args):
         typ = fm.get("type") or "concept"
         status = fm.get("status") or "draft"
         tags = fm.get("tags") or ""
+        if isinstance(tags, list):
+            tags = ", ".join(tags)
         project = fm.get("project") or ""
+        if isinstance(project, list):
+            project = ", ".join(project)
         created = fm.get("created") or ""
         updated = fm.get("updated") or ""
         description = fm.get("description") or ""

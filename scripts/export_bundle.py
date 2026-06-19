@@ -26,12 +26,32 @@ def parse_frontmatter(text: str) -> dict:
     if not m:
         return {}
     data = {}
-    for raw in m.group(1).splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or ":" not in line:
+    lines = m.group(1).splitlines()
+    current_key = None
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        k, v = line.split(":", 1)
-        data[k.strip()] = v.strip().strip('"').strip("'")
+        if stripped.startswith("-") and current_key:
+            val = stripped[1:].strip().strip('"').strip("'")
+            if current_key in data:
+                if isinstance(data[current_key], list):
+                    data[current_key].append(val)
+                elif data[current_key] == "":
+                    data[current_key] = [val]
+                else:
+                    data[current_key] = [data[current_key], val]
+            else:
+                data[current_key] = [val]
+            continue
+        if ":" in line:
+            k, v = line.split(":", 1)
+            k = k.strip().lower()
+            v = v.strip().strip('"').strip("'")
+            if v.startswith("[") and v.endswith("]"):
+                v = [item.strip().strip('"').strip("'") for item in v[1:-1].split(",") if item.strip()]
+            data[k] = v
+            current_key = k
     return data
 
 
