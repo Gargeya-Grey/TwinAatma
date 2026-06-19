@@ -1,0 +1,23 @@
+# KnowledgeOS .gitignore
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Temporary
+*.tmp
+*.swp
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Local database (generated automatically via scripts)
+knowledge_index.db
+
+# Notion Environment variables / local keys
+.env
+*.env
