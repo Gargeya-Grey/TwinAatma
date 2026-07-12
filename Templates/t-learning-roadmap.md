@@ -2,7 +2,6 @@
 type: project
 description: Project hub for {{title}}.
 title: {{title}}
-description:
 schema: knowledgeos-v0.2
 status: draft
 created: {{date}}

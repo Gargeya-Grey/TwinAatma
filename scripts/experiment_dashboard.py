@@ -28,8 +28,11 @@ for status in ['active','draft','completed','archived']:
     if not group: continue
     lines += [f'## {status.title()} Experiments','']
     for r in group:
-        rel=r['path'][:-3] if r['path'].endswith('.md') else r['path']
-        lines.append(f"- [[../{rel}|{r['title']}]] — project: {r['project'] or 'n/a'}; updated: {r['updated'] or 'n/a'}")
+        rel = r['path']
+        lines.append(
+            f"- [{r['title']}](../{rel}) — project: {r['project'] or 'n/a'}; "
+            f"updated: {r['updated'] or 'n/a'}"
+        )
     lines.append('')
 lines += ['## Review Prompts','','- Which active experiments have no results yet?','- Which experiments should become decisions?','- Which assumptions have no experiment?','']
 OUT.write_text('\n'.join(lines),encoding='utf-8')

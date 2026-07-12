@@ -1,0 +1,56 @@
+{
+  "schema": "knowledgeos-v0.2",
+  "notion": {
+    "enabled": false,
+    "api_key": "",
+    "database_id": "",
+    "data_source_id": "",
+    "category_map": {
+      "ai": "AI/Agents",
+      "agent": "AI/Agents",
+      "product": "Platform",
+      "platform": "Platform",
+      "marketing": "GTM",
+      "gtm": "GTM",
+      "sales": "GTM",
+      "content": "Content/Vlog",
+      "vlog": "Content/Vlog",
+      "ops": "Ops/Systems",
+      "system": "Ops/Systems",
+      "systems": "Ops/Systems",
+      "finance": "Finance",
+      "fundraising": "Finance",
+      "health": "Health",
+      "learning": "Learning",
+      "research": "Learning"
+    },
+    "default_category": "Learning",
+    "status_map": {
+      "active": "Active",
+      "draft": "Dumped",
+      "refined": "Active",
+      "archived": "Archived"
+    },
+    "property_names": {
+      "title": "Idea",
+      "category": "Category",
+      "status": "Status",
+      "priority": "Priority",
+      "context": "Context",
+      "next_action": "Next Action",
+      "obsidian_link": "Obsidian Link",
+      "note_type": "Note Type"
+    },
+    "status_prefix": "⚡ ",
+    "priority_prefix": "🔥 ",
+    "default_context": "🧠 Deep Work"
+  },
+  "mcp": {
+    "enabled": true,
+    "framing": "content-length",
+    "note": "Start with: python -m knowledgeos mcp  (see mcp.cursor.example.json)"
+  },
+  "privacy": {
+    "local_only": true
+  }
+}

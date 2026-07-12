@@ -28,7 +28,7 @@ Hub for learning activities, skill acquisition, books, papers, courses, and deli
 
 ## Source Types
 - Books:
-- Papers: [Claude Code Design Space Paper](../Assets/papers/claude-code-design-space-arxiv-2604.14228.pdf)
+- Papers:
 - Courses:
 - Conversations:
 - Experiments:

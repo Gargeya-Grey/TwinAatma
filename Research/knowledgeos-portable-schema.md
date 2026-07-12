@@ -48,6 +48,30 @@ source_type: article | book | paper | video | conversation | website | dataset
 publish_to_notion: false
 ```
 
+## Schema v0.3 Additive Fields (optional, OKF-compatible)
+
+Backward compatible with `knowledgeos-v0.2`. Prefer `schema: knowledgeos-v0.3` when using these fields.
+
+```yaml
+id: kos:decision:reject-offer          # stable entity id
+aliases: [Reject Offer, Offer Decision]
+confidence: 0.7                        # 0.0–1.0, optional
+last_reviewed: 2026-07-12
+supersedes: [kos:decision:older-id]
+invalidates: []
+expected_outcome: "Preserve senior positioning"
+actual_outcome: ""                     # filled later
+outcome_status: pending | confirmed | invalidated | superseded
+lesson: ""
+review_after: 2026-08-01
+```
+
+Additional note types (optional): `belief`, `heuristic`, `mental_model`.
+
+ID format: `kos:<type>:<slug>` (lowercase slug with hyphens).
+
+Python package: `from knowledgeos import parse_frontmatter` (see `knowledgeos/`).
+
 ## Field Meaning
 | Field | Meaning |
 |---|---|

@@ -10,43 +10,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
+if str(VAULT_DIR) not in sys.path:
+    sys.path.insert(0, str(VAULT_DIR))
+
+from knowledgeos.parser import parse_frontmatter, split_frontmatter  # noqa: E402
+
 DB = VAULT_DIR / "knowledge_index.db"
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
 WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)")
-
-def parse_frontmatter(text: str) -> dict:
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    data = {}
-    lines = m.group(1).splitlines()
-    current_key = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("-") and current_key:
-            val = stripped[1:].strip().strip('"').strip("'")
-            if current_key in data:
-                if isinstance(data[current_key], list):
-                    data[current_key].append(val)
-                elif data[current_key] == "":
-                    data[current_key] = [val]
-                else:
-                    data[current_key] = [data[current_key], val]
-            else:
-                data[current_key] = [val]
-            continue
-        if ":" in line:
-            k, v = line.split(":", 1)
-            k = k.strip().lower()
-            v = v.strip().strip('"').strip("'")
-            if v.startswith("[") and v.endswith("]"):
-                v = [item.strip().strip('"').strip("'") for item in v[1:-1].split(",") if item.strip()]
-            data[k] = v
-            current_key = k
-    return data
 
 def title_from_note(path: Path, text: str, fm: dict) -> str:
     if fm.get("title"):
@@ -100,6 +71,7 @@ def process_file_worker(args):
             
         # Parse note data
         fm = parse_frontmatter(text)
+        _, body_only = split_frontmatter(text)
         title = title_from_note(path, text, fm)
         typ = fm.get("type") or "concept"
         status = fm.get("status") or "draft"
@@ -115,6 +87,18 @@ def process_file_worker(args):
         resource = fm.get("resource") or ""
         timestamp = fm.get("timestamp") or ""
         schema = fm.get("schema") or ""
+        entity_id = fm.get("id") or ""
+        confidence = fm.get("confidence")
+        if confidence is None or confidence == "":
+            confidence = ""
+        else:
+            confidence = str(confidence)
+        last_reviewed = fm.get("last_reviewed") or ""
+        outcome_status = fm.get("outcome_status") or ""
+        review_after = fm.get("review_after") or ""
+        lesson = fm.get("lesson") or ""
+        if isinstance(lesson, list):
+            lesson = "; ".join(str(x) for x in lesson)
         
         raw_links = []
         for raw in WIKILINK_RE.findall(text):
@@ -128,8 +112,14 @@ def process_file_worker(args):
             dest = normalize_link(raw, rel, lookup)
             resolved_links.append((dest, raw))
             
-        note_data = (title, rel, typ, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash)
-        return (rel, file_hash, False, (note_data, resolved_links))
+        note_data = (
+            title, rel, typ, tags, project, status, created, updated,
+            description, resource, timestamp, schema, file_hash,
+            entity_id, confidence, last_reviewed, outcome_status,
+            review_after, str(lesson)[:2000],
+        )
+        fts_row = (rel, title, body_only[:100000], tags, description)
+        return (rel, file_hash, False, (note_data, resolved_links, fts_row))
     except Exception as e:
         return (str(path), "", False, e)
 
@@ -153,7 +143,13 @@ def main():
       resource TEXT,
       timestamp TEXT,
       schema TEXT,
-      file_hash TEXT
+      file_hash TEXT,
+      entity_id TEXT,
+      confidence TEXT,
+      last_reviewed TEXT,
+      outcome_status TEXT,
+      review_after TEXT,
+      lesson TEXT
     );
     CREATE TABLE IF NOT EXISTS links (
       id INTEGER PRIMARY KEY,
@@ -164,16 +160,42 @@ def main():
     );
     CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT);
     """)
+    # FTS5 body index (stdlib SQLite)
+    cur.execute(
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
+          path UNINDEXED,
+          title,
+          body,
+          tags,
+          description,
+          tokenize = 'porter unicode61'
+        )
+        """
+    )
     # Add columns for old DBs.
     link_cols = [r[1] for r in cur.execute("PRAGMA table_info(links)")]
     if "raw_destination" not in link_cols:
         cur.execute("ALTER TABLE links ADD COLUMN raw_destination TEXT")
     note_cols = [r[1] for r in cur.execute("PRAGMA table_info(notes)")]
-    for col in ["description", "resource", "timestamp", "schema"]:
+    for col in [
+        "description", "resource", "timestamp", "schema", "file_hash",
+        "entity_id", "confidence", "last_reviewed", "outcome_status",
+        "review_after", "lesson",
+    ]:
         if col not in note_cols:
             cur.execute(f"ALTER TABLE notes ADD COLUMN {col} TEXT")
-    if "file_hash" not in note_cols:
-        cur.execute("ALTER TABLE notes ADD COLUMN file_hash TEXT")
+
+    # If v0.3 columns are empty across the board, invalidate hashes to backfill.
+    try:
+        empty_v03 = cur.execute(
+            "SELECT COUNT(*) FROM notes WHERE IFNULL(entity_id,'')='' AND IFNULL(outcome_status,'')=''"
+        ).fetchone()[0]
+        total = cur.execute("SELECT COUNT(*) FROM notes").fetchone()[0]
+        if total and empty_v03 == total:
+            cur.execute("UPDATE notes SET file_hash = NULL")
+    except sqlite3.Error:
+        pass
 
     # Load existing notes to perform incremental updates
     db_notes = {r[0]: r[1] for r in cur.execute("SELECT path, file_hash FROM notes").fetchall()}
@@ -184,8 +206,16 @@ def main():
         if path not in current_paths:
             cur.execute("DELETE FROM notes WHERE path = ?", (path,))
             cur.execute("DELETE FROM links WHERE source = ?", (path,))
+            cur.execute("DELETE FROM notes_fts WHERE path = ?", (path,))
 
-    note_count = link_count = 0
+    # Ensure FTS populated for all current notes at least once
+    fts_count = cur.execute("SELECT count(*) FROM notes_fts").fetchone()[0]
+    if fts_count == 0:
+        # First-time FTS backfill: invalidate hashes and reload
+        cur.execute("UPDATE notes SET file_hash = NULL")
+        db_notes = {r[0]: r[1] for r in cur.execute("SELECT path, file_hash FROM notes").fetchall()}
+
+    note_count = link_count = fts_updates = 0
     
     # Process files concurrently using a ThreadPoolExecutor
     worker_args = [(p, db_notes, lookup) for p in md_files]
@@ -205,11 +235,18 @@ def main():
                 cur.execute("UPDATE links SET destination = ? WHERE id = ?", (dest, link_id))
                 link_count += 1
         else:
-            note_data, resolved_links = payload
+            note_data, resolved_links, fts_row = payload
             cur.execute("DELETE FROM links WHERE source = ?", (rel,))
             cur.execute("""INSERT OR REPLACE INTO notes
-              (title, path, type, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", note_data)
+              (title, path, type, tags, project, status, created, updated, description, resource, timestamp, schema, file_hash,
+               entity_id, confidence, last_reviewed, outcome_status, review_after, lesson)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", note_data)
+            cur.execute("DELETE FROM notes_fts WHERE path = ?", (rel,))
+            cur.execute(
+                "INSERT INTO notes_fts(path, title, body, tags, description) VALUES (?, ?, ?, ?, ?)",
+                fts_row,
+            )
+            fts_updates += 1
             note_count += 1
             for dest, raw in resolved_links:
                 cur.execute("INSERT INTO links (source, destination, raw_destination) VALUES (?, ?, ?)", (rel, dest, raw))
@@ -217,6 +254,7 @@ def main():
 
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_rebuild_note_count', ?)", (str(note_count),))
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_rebuild_link_count', ?)", (str(link_count),))
+    cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_fts_updates', ?)", (str(fts_updates),))
     conn.commit()
     print("Rebuilding KnowledgeOS index...")
     print(f"Vault: {VAULT_DIR}")
@@ -224,6 +262,7 @@ def main():
     print("Done.")
     print(f"Notes: {note_count}")
     print(f"Links: {link_count}")
+    print(f"FTS updates: {fts_updates}")
 
 if __name__ == "__main__":
     main()

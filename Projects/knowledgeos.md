@@ -1,47 +1,36 @@
 ---
 type: project
-title: KnowledgeOS
-description: Project hub for KnowledgeOS.
-schema: knowledgeos-v0.2
+title: TwinAatma (KnowledgeOS toolkit)
+description: Project hub for TwinAatma — public brand for the personal cognitive twin; technical toolkit remains knowledgeos.
+schema: knowledgeos-v0.3
 status: active
 created: 2026-06-18
-tags: [knowledgeos, systems, obsidian, hermes]
+tags: [twinaatma, knowledgeos, systems, obsidian, hermes, mcp, roadmap]
 project: KnowledgeOS
-updated: 2026-06-18
-timestamp: 2026-06-18T00:00:00Z
+updated: 2026-07-12
+timestamp: 2026-07-12T00:00:00Z
 ---
-# KnowledgeOS
+# TwinAatma
+
+Public brand for this vault’s cognitive twin *(Twin-AAT-maa)*. Technical CLI/package: `knowledgeos`. See [Public brand is TwinAatma](../Decisions/public-brand-twinaatma.md).
 
 ## Objective
-Turn the current Obsidian/Hermes vault from a scaffold into a living personal operating system for learning, startup planning, research, and productive work.
+Become a plug-and-play subconscious / long-term memory system: OKF-aligned portable knowledge that any AI can load and update, with a Self-model that compounds into the closest digital representation of the user over time.
 
 ## Success Criteria
-- Daily capture is easy.
-- Weekly synthesis produces useful decisions/actions.
-- Active projects are visible from one dashboard.
-- Notes reliably connect to domains and projects.
-- Scripts work without environment-specific CLI dependencies.
-- Role boundaries between Obsidian/Notion/Hermes are documented.
-- Template library covers startup, learning, execution, and research.
+- Init + onboarding stands up a clean vault in ≤10 minutes.
+- MCP Memory API works across AI clients (Self, search, capture, propose updates).
+- Decision→outcome→lesson→Self proposal loop is operational.
+- Markdown remains canonical; indexes/Notion/MCP are derived.
+- Shared SDK/parser; schema validated; no founder secrets in toolkit.
+- Role boundaries: Obsidian thinking, optional Notion execution, agents via MCP/CLI.
 
 ## Current State
-The KnowledgeOS has been upgraded through a complete 5-step strategic build:
-- Step 1 (Audit) — Found scaffold issues, placeholder indexes, sqlite3 dependency, hardcoded token, missing project layer.
-- Step 2 (Design) — Added domain MOCs, operating loop, active projects, README overhaul.
-- Step 3 (Templates) — 26 templates across startup, learning, research, execution.
-- Step 4 (Automation) — 9 scripts covering index, search, weekly data, capture, refinement, experiments dashboard, drafting, MOC updates.
-- Step 5 (Execution System) — Role boundaries document, execution MOC, operating cadence, decision log.
-
-## Related Knowledge
-- [KnowledgeOS MOC](../MOCs/_MOC_KnowledgeOS.md)
-- [Execution System MOC](../MOCs/_MOC_Execution_System.md)
-- [KnowledgeOS README](../README.md)
-- [Active Work MOC](../MOCs/_MOC_Active.md)
-- [Template Index](../Templates/_Index.md)
-- [Role Boundaries Decision](../Decisions/obsidian-notion-hermes-role-boundaries.md)
-- [Refinement Bar Decision](../Decisions/refinement-bar-for-notion-publishing.md)
+- **Public brand:** TwinAatma (2026-07-12). Internals still `knowledgeos`.
+- **Roadmap P0–P8: closed (2026-07-12).** After setup, autopilot (`breathe` / session hooks) keeps the twin fresh. Optional polish: screenshots, GitHub Actions CI, bulk `ids assign --write`.
+- Living ops: MCP Memory autopilot (`memory_session_start` freshen + soft prompts), outcome→Self proposals, FTS search, intelligence briefs.
 
 ## Next Actions
-- Run `python scripts/rebuild_index.py` to index the vault.
-- Review [Experiments Dashboard](../MOCs/_MOC_Experiments.md).
-- Explore templates in [Templates Index](../Templates/_Index.md) to start creating notes.
+- Point Cursor at `mcp.cursor.example.json` and use the vault daily.
+- Weekly: Outcomes Dashboard + soft Self proposals (agent-owned).
+- Optional: `python -m knowledgeos ids assign --write`

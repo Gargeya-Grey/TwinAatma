@@ -6,8 +6,8 @@ schema: knowledgeos-v0.2
 status: active
 tags: [knowledgeos, onboarding, guide, second-brain]
 created: 2026-06-18
-updated: 2026-06-18
-timestamp: 2026-06-18T00:00:00Z
+updated: 2026-07-12
+timestamp: 2026-07-12T00:00:00Z
 project: KnowledgeOS
 ---
 # How KnowledgeOS Works
@@ -15,7 +15,26 @@ project: KnowledgeOS
 This note explains KnowledgeOS as if you are seeing it for the first time.
 
 ## One-Line Summary
-KnowledgeOS is a personal operating system for your thinking: it captures ideas, organizes them into typed notes, connects them through links, turns them into decisions/projects/experiments, and uses Hermes automation to keep the system searchable and alive.
+KnowledgeOS is portable cognitive memory: markdown you own, any AI can load via MCP, and a Self-model that compounds through outcomes and reviews.
+
+## The Canonical Loop
+
+```text
+Capture → Clarify → Connect → Decide → Execute → Record Outcome → Review → Update Self
+```
+
+| Stage | Meaning | Tooling |
+|---|---|---|
+| Capture | Get the thought out | `Inbox/` + `memory_capture` |
+| Clarify | Typed note + metadata | Templates |
+| Connect | Links to MOCs/projects/decisions | validate_schema |
+| Decide | First-class decision note | `Decisions/` + outcome fields |
+| Execute | Do the work (Notion/tasks/world) | optional Notion bridge |
+| Record Outcome | expected → actual → lesson | Outcomes Dashboard |
+| Review | Weekly synthesis + alignment | `draft_weekly_synthesis.py` |
+| Update Self | Proposal → accept/reject | `propose_self_update.py` / MCP |
+
+This loop is what turns a vault into a **digital representation of you over time**.
 
 ## Why It Is Good
 
@@ -67,21 +86,22 @@ For any project or startup, KnowledgeOS supports:
 
 ## The Core Idea
 
-Most note systems become dumping grounds. KnowledgeOS is designed to become an operating loop:
+Most note systems become dumping grounds. KnowledgeOS compounds a Self-model through outcomes:
 
 ```text
-Capture → Clarify → Connect → Commit → Execute → Review → Synthesize
+Capture → Clarify → Connect → Decide → Execute → Record Outcome → Review → Update Self
 ```
 
 | Stage | Meaning | Example |
 |---|---|---|
-| Capture | Get the raw thought out of your head | Put an idea into Inbox |
-| Clarify | Turn raw input into a typed note | Convert it into a project/research/concept note |
-| Connect | Link it to relevant projects/MOCs/decisions | Link a startup research note to Startup MOC |
-| Commit | Decide what matters | Create a decision note or next action |
-| Execute | Run the work outside the vault | Use Notion/tasks/customer calls/building |
-| Review | Check what changed | Weekly review and experiment dashboard |
-| Synthesize | Extract patterns and decisions | Weekly synthesis note |
+| Capture | Get the raw thought out | Inbox + `memory_capture` |
+| Clarify | Typed note + metadata | Convert Inbox → project/research/concept |
+| Connect | Link to MOCs/projects/decisions | No orphans |
+| Decide | Log the choice | `Decisions/` with expected_outcome |
+| Execute | Do the work outside the vault | Notion/tasks/building |
+| Record Outcome | Fill actual + lesson | Outcomes Dashboard |
+| Review | Weekly + alignment | `draft_weekly_synthesis.py` |
+| Update Self | Proposal → accept/reject | Never silent Self writes |
 
 ## The Main Parts
 

@@ -1,9 +1,9 @@
 ---
 type: decision
-description: Decision log for {{title}}.
 title: {{title}}
-description:
-schema: knowledgeos-v0.2
+description: Decision log for {{title}}.
+id:
+schema: knowledgeos-v0.3
 status: draft
 created: {{date}}
 updated: {{date}}
@@ -11,6 +11,13 @@ tags: []
 project:
 timestamp: {{date}}T00:00:00Z
 resource:
+expected_outcome:
+actual_outcome:
+outcome_status: pending
+lesson:
+review_after:
+confidence:
+last_reviewed:
 ---
 
 # {{title}}
@@ -33,8 +40,12 @@ resource:
 
 ## Expected Outcome
 
-<!-- What do you anticipate will happen as a result? -->
+<!-- Mirror expected_outcome frontmatter. What do you anticipate will happen? -->
 
 ## Actual Outcome
 
-<!-- (Filled in later) What actually happened? Did the decision hold up? -->
+<!-- Mirror actual_outcome frontmatter. Fill later; set outcome_status accordingly. -->
+
+## Lesson
+
+<!-- Mirror lesson frontmatter. What should the Self-model learn? -->

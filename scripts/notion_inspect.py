@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _notion_env
 
 KEY = _notion_env.get_notion_key()
-DS_ID = _notion_env.DS_ID
+DS_ID = _notion_env.get_notion_database_id()
 
 req = urllib.request.Request(
     f'https://api.notion.com/v1/data_sources/{DS_ID}',

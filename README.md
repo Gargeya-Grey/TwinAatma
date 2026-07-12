@@ -1,68 +1,156 @@
-# 🧠 KnowledgeOS
-> Your personal knowledge operating system — an AI-operable Obsidian vault for thinking, learning, startup building, research, decisions, and execution.
+<p align="center">
+  <img src="docs/brand/twinaatma-header.gif" alt="TwinAatma — pixel art brain among galaxies, your cognitive twin" width="720" />
+</p>
 
-[![Python Version](https://img.shields.io/badge/python-3.8%2B-blue.svg)](https://www.python.org/)
-[![Obsidian](https://img.shields.io/badge/Obsidian-compatible-purple.svg)](https://obsidian.md/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![AI-Ready](https://img.shields.io/badge/AI-Ready-orange.svg)](#-agent-automation-setup-guide)
+<h1 align="center">TwinAatma</h1>
 
-Designed to work alongside **Notion** (as the execution layer) and **Hermes** (as the AI orchestrator), KnowledgeOS turns a folder of markdown files into a structured, queryable knowledge graph.
+<p align="center">
+  <strong>The twin of your Self</strong> — private cognitive memory any AI can load, that stays current as you live.
+</p>
+
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+" /></a>
+  <a href="https://obsidian.md/"><img src="https://img.shields.io/badge/Obsidian-compatible-purple.svg" alt="Obsidian compatible" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
+  <a href="#-one-time-setup-wire-mcp"><img src="https://img.shields.io/badge/AI-Ready-orange.svg" alt="AI Ready" /></a>
+</p>
+
+**Public name:** TwinAatma *(Twin-AAT-maa — twin + aatma, self/soul)*  
+**Technical toolkit:** `knowledgeos` (package, CLI, schema ids — unchanged for now)
+
+**Your job:** wire the MCP Memory server once.  
+**The agent's job:** load your Self, search memory, capture what matters, propose twin updates, and ask only for high-leverage yes/no. See [AGENTS.md](AGENTS.md).
+
+Not another PKM theme pack. TwinAatma is **local-first cognitive memory**: OKF-aligned markdown you own, an MCP Memory API any agent can call, and a Self-model updated through decision outcomes (never silent rewrites).
+
+Obsidian is recommended for humans. Notion and Hermes are optional. Brand decision: [Public brand is TwinAatma](Decisions/public-brand-twinaatma.md). Roadmap: [Strategic Implementation Plan v1](Decisions/strategic-implementation-plan-v1.md).
+
+> **Name notes:**  
+> - **TwinAatma** is this repo’s public brand (personal cognitive twin). Not affiliated with other Atma/ATMA products.  
+> - **KnowledgeOS** may still appear in paths, CLI (`python -m knowledgeos`), and schema ids — legacy technical name.
+
+---
+
+## 🔌 One-time setup: wire MCP
+
+```bash
+python -m knowledgeos mcp
+```
+
+Cursor example: [`mcp.cursor.example.json`](mcp.cursor.example.json)
+
+```json
+{
+  "mcpServers": {
+    "knowledgeos": {
+      "command": "python",
+      "args": ["-m", "knowledgeos", "mcp"],
+      "cwd": "W:/AI-Projects/TwinAatma",
+      "env": { "KNOWLEDGEOS_VAULT": "W:/AI-Projects/TwinAatma" }
+    }
+  }
+}
+```
+
+After that, **just chat**. Autopilot keeps the twin fresh:
+
+| Ritual | What happens |
+|---|---|
+| Chat starts (Cursor hook + agent) | Index refreshed if stale; Self + relevant memory loaded |
+| During chat | Captures + search without you managing folders |
+| Preference change | Soft “Want me to remember that?” → yes/no |
+| Chat ends usefully | Session summary saved; index freshened |
+| ~Weekly | Drift proposal drafted for your yes/no |
+
+Agents follow `AGENTS.md` / `.cursor/rules` / MCP `instructions`. You should not manage indexes, scripts, or cadences after setup.
 
 ---
 
 ## 🤖 Agent Automation: Setup Guide
-If you are an AI agent (e.g. Claude Code, Cursor, Windsurf, Antigravity) instructed to **"setup <link>"** or initialize this repository, execute the following commands in the workspace root:
+If you are an AI agent (e.g. Claude Code, Cursor, Windsurf) instructed to **"setup <link>"** or initialize this repository, execute the following commands in the workspace root:
 
 ```bash
-# Step 1: Initialize the SQLite index database
+python scripts/doctor.py
 python scripts/rebuild_index.py
-
-# Step 2: Refresh the auto-generated dashboards
 python scripts/update_mocs.py
-
-# Step 3: Validate the vault schema health
 python scripts/validate_schema.py
-
-# Step 4: Set up local git pre-commit hooks for schema validation
 python scripts/setup_git_hooks.py
 ```
 
-*Note: No external package installation (pip) is needed. KnowledgeOS runs purely on Python standard libraries.*
+*Note: Core KnowledgeOS uses Python 3.9+ standard library only (no pip). Notion is optional.*
+
+CLI fallback (same tools, no MCP host needed — for debugging only):
+
+```bash
+python -m knowledgeos memory list
+python -m knowledgeos memory memory_session_start --task-hint "ship MCP"
+python -m knowledgeos memory memory_ops_status
+```
+
+Self writes are **proposal-only** until you say yes in chat (or via accept tool):
+
+```bash
+python -m knowledgeos memory memory_propose_self_update --summary "..." --section heuristics --proposed-markdown "..."
+python -m knowledgeos memory memory_accept_self_update --path People/Self-Proposals/...
+```
+
+### Outcome → Self loop (agent-owned)
+
+Agents use MCP (`memory_propose_from_lesson`, `memory_propose_from_drift`, accept/reject). Power users can still call scripts; normal operation should not require it.
+
+```bash
+python scripts/check_alignment.py
+python scripts/update_mocs.py
+python scripts/propose_self_update.py from-lesson Decisions/your-decision.md
+```
+
+```bash
+python -m knowledgeos init ./my-brain --name "Your Name" --non-interactive
+cd ./my-brain
+python scripts/rebuild_index.py
+python scripts/validate_schema.py
+python -m knowledgeos self summary
+```
+
+Assign stable entity IDs (dry-run by default):
+
+```bash
+python -m knowledgeos ids assign
+python -m knowledgeos ids assign --write
+```
 
 ---
 
 ## ⚙️ Installation & Manual Setup Guide
 
-To get KnowledgeOS running, perform the following manual steps:
-
-1. **Obsidian Vault Setup**:
-   - Download and install [Obsidian](https://obsidian.md/).
-   - Open this directory as a new vault in Obsidian.
+1. **Obsidian Vault Setup** (recommended, not required for agents):
+   - Install [Obsidian](https://obsidian.md/) and open this directory as a vault.
 2. **Initialize Search Database**:
-   - Ensure Python 3.8+ is installed.
-   - Run the index builder command in your terminal to initialize your local search database (`knowledge_index.db`):
+   - Ensure **Python 3.9+** is installed.
+   - Run:
      ```bash
      python scripts/rebuild_index.py
      ```
 3. **Configure Your Ego Node (Self-Model)**:
-   - Run the cognitive onboarding wizard in your terminal:
-     ```bash
-     python scripts/onboarding.py
-     ```
-   - This interactive CLI wizard will capture your heuristics, core values, and anti-goals to automatically generate your baseline profile at [People/Self.md](People/Self.md). You can also edit this file manually.
-4. **Environment Configuration (Optional Notion Sync & Git Hooks)**:
-   - If you want to use the Notion publishing bridge, create a `.env` file at `~/.hermes/.env` (on Unix/macOS) or in your `%LOCALAPPDATA%/hermes/.env` folder (on Windows) and add your integration details:
+   ```bash
+   python scripts/onboarding.py
+   ```
+   Generates [People/Self.md](People/Self.md).
+4. **Optional Notion Sync & Git Hooks**:
+   - Copy `knowledgeos.config.example.json` → `knowledgeos.config.json` and fill Notion fields, **or** set:
      ```env
      NOTION_API_KEY=your_secret_api_key_here
-     NOTION_DATABASE_ID=your_database_or_wiki_id_here
+     NOTION_DATABASE_ID=your_database_or_data_source_id_here
      ```
+   - Hermes `~/.hermes/.env` is also supported if you use Hermes.
    - Set up the pre-commit validation hook:
      ```bash
      python scripts/setup_git_hooks.py
      ```
 5. **Run System Checks**:
-   - Run the alignment diagnostic tool: `python scripts/check_alignment.py`
-   - Run the focus analyzer: `python scripts/semantic_drift.py` *(requires at least one Git commit in the vault).*
+   - `python scripts/doctor.py`
+   - `python scripts/check_alignment.py`
+   - `python scripts/semantic_drift.py` *(requires git history)*
 
 ---
 
@@ -115,22 +203,49 @@ KnowledgeOS/
 ---
 
 ## ⚙️ Automation Scripts
-All scripts are written in standard Python (no `pip install` required) and can be executed via terminal commands:
+All core scripts use the Python standard library (no `pip install` required):
 
 | Command | Purpose |
 |---|---|
-| `python scripts/doctor.py` | Run diagnostic environment and vault health checks. |
-| `python scripts/rebuild_index.py` | Scan the vault and rebuild the SQLite index (`knowledge_index.db`). |
-| `python scripts/search.py "<query>"` | Graph-aware search (evaluates titles, tags, projects, and links). |
-| `python scripts/update_mocs.py` | Rebuild and refresh all dynamic dashboards (e.g. experiments). |
-| `python scripts/daily_capture_report.py` | Inspect Inbox folder and suggest next organization steps. |
-| `python scripts/refinement_report.py` | Generate a report on notes missing links, tags, or metadata. |
-| `python scripts/validate_schema.py` | Validate portable metadata structures, provenance, and link health. |
-| `python scripts/setup_git_hooks.py` | Configure local Git pre-commit hooks for schema validation. |
-| `python scripts/refactor_links.py` | Automatically refactor broken paths and migrate wikilinks. |
-| `python scripts/draft_weekly_synthesis.py` | Aggregate weekly vault changes and draft a review note. |
-| `python scripts/export_bundle.py` | Bundle markdown files and assets for a project. |
-| `python scripts/publish_to_notion.py` | Sync and publish refined notes to the Notion wiki. |
+| `python scripts/doctor.py` | Environment and vault health diagnostics. |
+| `python scripts/onboarding.py` | Interactive Ego Node wizard → `People/Self.md`. |
+| `python scripts/rebuild_index.py` | Rebuild SQLite index (`knowledge_index.db`). |
+| `python scripts/search.py "<query>"` | Blended metadata + FTS5 body search (ranked). |
+| `python scripts/intelligence_brief.py` | Weekly intelligence brief (decisions, drift, gaps, tensions). |
+| `python scripts/learning_trajectory.py` | “How my thinking changed” trajectory report. |
+| `python scripts/update_mocs.py` | Refresh generated dashboards (experiments, outcomes, orphans, themes, …). |
+| `python scripts/experiment_dashboard.py` | Regenerate Experiments MOC. |
+| `python scripts/daily_capture_report.py` | Inbox triage report. |
+| `python scripts/refinement_report.py` | Notes needing cleanup / publish readiness. |
+| `python scripts/validate_schema.py` | Validate frontmatter + link health. |
+| `python scripts/check_alignment.py` | Orphan decisions / stale project checks. |
+| `python scripts/semantic_drift.py` | Git-based focus drift report (30 days). |
+| `python scripts/weekly_data.py` | Weekly vault metrics (JSON). |
+| `python scripts/setup_git_hooks.py` | Install pre-commit schema validation hook. |
+| `python scripts/refactor_links.py` | Fix broken paths; migrate wikilinks → markdown links. |
+| `python scripts/draft_weekly_synthesis.py` | Draft weekly synthesis note. |
+| `python scripts/export_bundle.py` | Export portable markdown bundle + manifest. |
+| `python scripts/smoke_test.py` | Quick smoke test for parser, Self sections, index columns. |
+| `python -m knowledgeos init <path>` | Create a clean starter vault. |
+| `python -m knowledgeos ids assign` | Dry-run assign `kos:<type>:<slug>` IDs. |
+| `python -m knowledgeos self summary` | Parse Ego Node sections as JSON. |
+| `python scripts/publish_to_notion.py` | Publish refined notes to Notion (optional). |
+| `python scripts/notion_test.py` | Test Notion API connectivity. |
+| `python scripts/notion_inspect.py` | Inspect Notion data source schema. |
+| `python scripts/notion_bridge.py` | Notion DB property setup / single-note bridge helpers. |
+
+## 📬 Notion Publishing Bridge
+Only **refined** notes should cross the bridge:
+```yaml
+status: refined
+publish_to_notion: true
+```
+Configure via `knowledgeos.config.json` (see `knowledgeos.config.example.json`) or environment variables. There is **no hardcoded database ID** in the repo.
+
+```bash
+python scripts/publish_to_notion.py --dry-run path/to/note.md
+python scripts/publish_to_notion.py --dry-run --all
+```
 
 ---
 
@@ -150,19 +265,6 @@ All scripts are written in standard Python (no `pip install` required) and can b
 1. Instantiate the monthly review template (`Templates/t-monthly-review`).
 2. Move completed/stale projects to `Archive/`.
 3. Update strategic roadmaps and learning trajectories.
-
----
-
-## 📬 Notion Publishing Bridge
-Only **refined** notes should cross the bridge. A note qualifies as refined when it has a clear purpose, is well-structured, contains backlinks, and has:
-```yaml
-status: refined
-publish_to_notion: true
-```
-To test publishing:
-```bash
-python scripts/publish_to_notion.py --dry-run path/to/note.md
-```
 
 ---
 

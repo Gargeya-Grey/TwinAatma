@@ -2,10 +2,15 @@
 """KnowledgeOS Alignment & Project Health Diagnostic.
 
 Checks for:
-1. Orphan decisions (decisions with no incoming or outgoing links).
-2. Pending decisions mentioned in folder indexes.
-3. Stale projects (projects without next actions).
+1. Orphan decisions
+2. Pending decisions mentioned in folder indexes
+3. Stale projects (no next actions)
+4. Decision outcomes due for review (outcome_status pending + review_after)
+5. Decisions with lessons that have no Self proposal yet (informational)
 """
+from __future__ import annotations
+
+import datetime
 import sqlite3
 import sys
 from pathlib import Path
@@ -13,27 +18,35 @@ from pathlib import Path
 VAULT_DIR = Path(__file__).resolve().parent.parent
 DB = VAULT_DIR / "knowledge_index.db"
 
-def main():
+
+def main() -> int:
     if not DB.exists():
         print(f"Index database not found at {DB}. Please run python scripts/rebuild_index.py first.")
-        sys.exit(1)
+        return 1
 
     conn = sqlite3.connect(DB, timeout=30.0)
+    conn.row_factory = sqlite3.Row
     cur = conn.cursor()
+    today = datetime.date.today().isoformat()
 
-    # 1. Fetch decisions (excluding templates)
-    decisions = cur.execute("SELECT title, path, tags FROM notes WHERE type = 'decision' AND path NOT LIKE 'Templates/%'").fetchall()
-    
-    # 2. Fetch projects (excluding templates)
-    projects = cur.execute("SELECT title, path FROM notes WHERE type = 'project' AND path NOT LIKE 'Templates/%'").fetchall()
+    decisions = cur.execute(
+        """
+        SELECT title, path, tags, outcome_status, review_after, lesson
+        FROM notes
+        WHERE type = 'decision' AND path NOT LIKE 'Templates/%'
+        """
+    ).fetchall()
+    projects = cur.execute(
+        "SELECT title, path FROM notes WHERE type = 'project' AND path NOT LIKE 'Templates/%'"
+    ).fetchall()
 
     print("=== KnowledgeOS Alignment Diagnostic ===")
     print(f"Vault: {VAULT_DIR}")
-    
-    # Diagnostic A: Orphan Decisions
+
     print("\n[Diagnostic A: Decisions Link Check]")
     orphan_count = 0
-    for title, path, tags in decisions:
+    for row in decisions:
+        title, path = row["title"], row["path"]
         links = cur.execute(
             "SELECT count(*) FROM links WHERE source = ? OR destination = ?", (path, path)
         ).fetchone()[0]
@@ -45,11 +58,11 @@ def main():
     if orphan_count == 0:
         print("[OK] All decisions are linked to related projects/concepts.")
 
-    # Diagnostic B: Unlinked decisions to be made
     print("\n[Diagnostic B: Pending Decisions Check]")
     indices = cur.execute("SELECT path FROM notes WHERE type = 'index'").fetchall()
     pending_count = 0
-    for (idx_path,) in indices:
+    for row in indices:
+        idx_path = row["path"] if isinstance(row, sqlite3.Row) else row[0]
         full_path = VAULT_DIR / idx_path
         if full_path.exists():
             content = full_path.read_text(encoding="utf-8", errors="replace")
@@ -66,10 +79,10 @@ def main():
     if pending_count == 0:
         print("[OK] No pending decisions found in folder indexes.")
 
-    # Diagnostic C: Project Health Check
     print("\n[Diagnostic C: Project Health Check]")
     stale_count = 0
-    for title, path in projects:
+    for row in projects:
+        title, path = row["title"], row["path"]
         full_path = VAULT_DIR / path
         if full_path.exists():
             content = full_path.read_text(encoding="utf-8", errors="replace")
@@ -97,8 +110,43 @@ def main():
                     print(f"[OK]      Active: '{title}'")
     if stale_count == 0:
         print("[OK] All active projects have next actions defined.")
-                    
+
+    print("\n[Diagnostic D: Decision Outcome Reviews Due]")
+    due_count = 0
+    pending_outcomes = 0
+    for row in decisions:
+        title, path = row["title"], row["path"]
+        outcome = (row["outcome_status"] or "").strip().lower() or "pending"
+        review_after = (row["review_after"] or "").strip()
+        if outcome in {"pending", ""}:
+            pending_outcomes += 1
+            overdue = False
+            if review_after and review_after <= today:
+                overdue = True
+            elif not review_after:
+                # No review_after: still flag as awaiting outcome (not overdue)
+                print(f"[AWAITING] '{title}' ({path}) outcome_status={outcome or 'pending'} (no review_after)")
+                due_count += 1
+                continue
+            if overdue:
+                print(f"[DUE]      '{title}' ({path}) review_after={review_after}")
+                due_count += 1
+            else:
+                print(f"[SCHEDULED] '{title}' review_after={review_after}")
+        elif outcome in {"confirmed", "invalidated", "superseded"}:
+            lesson = (row["lesson"] or "").strip()
+            if not lesson:
+                print(f"[HINT]     '{title}' has outcome={outcome} but empty lesson — consider extracting a Self heuristic.")
+    if due_count == 0 and pending_outcomes == 0:
+        print("[OK] No pending decision outcomes.")
+    elif due_count == 0:
+        print("[OK] Pending outcomes exist but none are past review_after.")
+
+    print("\n--- Summary ---")
+    print(f"orphan_decisions={orphan_count} stale_projects={stale_count} outcome_items_flagged={due_count}")
     conn.close()
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

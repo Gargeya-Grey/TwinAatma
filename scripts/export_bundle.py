@@ -4,55 +4,22 @@
 Examples:
   python scripts/export_bundle.py --project Example --out exports/example-bundle
   python scripts/export_bundle.py --paths Projects Research/example-concept.md --out exports/custom
-
-The output is just markdown files plus a manifest.json. The source of truth
-remains the vault; this script creates a portable consumer bundle.
 """
 from __future__ import annotations
+
 import argparse
 import json
-import re
 import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.S)
+if str(VAULT_DIR) not in sys.path:
+    sys.path.insert(0, str(VAULT_DIR))
 
-
-def parse_frontmatter(text: str) -> dict:
-    m = FRONTMATTER_RE.match(text)
-    if not m:
-        return {}
-    data = {}
-    lines = m.group(1).splitlines()
-    current_key = None
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if stripped.startswith("-") and current_key:
-            val = stripped[1:].strip().strip('"').strip("'")
-            if current_key in data:
-                if isinstance(data[current_key], list):
-                    data[current_key].append(val)
-                elif data[current_key] == "":
-                    data[current_key] = [val]
-                else:
-                    data[current_key] = [data[current_key], val]
-            else:
-                data[current_key] = [val]
-            continue
-        if ":" in line:
-            k, v = line.split(":", 1)
-            k = k.strip().lower()
-            v = v.strip().strip('"').strip("'")
-            if v.startswith("[") and v.endswith("]"):
-                v = [item.strip().strip('"').strip("'") for item in v[1:-1].split(",") if item.strip()]
-            data[k] = v
-            current_key = k
-    return data
+from knowledgeos.parser import parse_frontmatter  # noqa: E402
+from knowledgeos.schema import SCHEMA_V02  # noqa: E402
 
 
 def note_title(path: Path, text: str, fm: dict) -> str:
@@ -71,13 +38,20 @@ def all_notes():
         yield path
 
 
+def _tags_blob(tags) -> str:
+    if isinstance(tags, list):
+        return " ".join(str(t).lower() for t in tags)
+    return str(tags or "").lower()
+
+
 def select_notes(project: str | None, paths: list[str]):
     selected = set()
     if project:
         for p in all_notes():
             text = p.read_text(encoding="utf-8", errors="replace")
             fm = parse_frontmatter(text)
-            if fm.get("project", "").lower() == project.lower() or project.lower() in fm.get("tags", "").lower():
+            proj = str(fm.get("project") or "").lower()
+            if proj == project.lower() or project.lower() in _tags_blob(fm.get("tags")):
                 selected.add(p)
     for item in paths:
         try:
@@ -105,9 +79,12 @@ def main():
         ap.error("Provide --project and/or --paths")
 
     out = (VAULT_DIR / args.out).resolve()
-    # Safety Check: Prevent deleting vault root or system parents
     if out == VAULT_DIR or out in VAULT_DIR.parents or not str(out).startswith(str(VAULT_DIR)):
-        print(f"[ERROR] Destructive export target path: output folder cannot be the vault root, system folders, or outside the vault workspace.", file=sys.stderr)
+        print(
+            "[ERROR] Destructive export target path: output folder cannot be the vault root, "
+            "system folders, or outside the vault workspace.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     if out.exists():
@@ -116,7 +93,7 @@ def main():
 
     manifest = {
         "format": "KnowledgeOS portable markdown bundle",
-        "schema": "knowledgeos-v0.2",
+        "schema": SCHEMA_V02,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "source_vault": str(VAULT_DIR),
         "selector": {"project": args.project, "paths": args.paths},
@@ -130,16 +107,19 @@ def main():
         shutil.copy2(src, dest)
         text = src.read_text(encoding="utf-8", errors="replace")
         fm = parse_frontmatter(text)
-        manifest["notes"].append({
-            "path": rel.as_posix(),
-            "title": note_title(src, text, fm),
-            "type": fm.get("type", ""),
-            "status": fm.get("status", ""),
-            "description": fm.get("description", ""),
-            "resource": fm.get("resource", ""),
-            "tags": fm.get("tags", ""),
-            "project": fm.get("project", ""),
-        })
+        manifest["notes"].append(
+            {
+                "path": rel.as_posix(),
+                "title": note_title(src, text, fm),
+                "type": fm.get("type", ""),
+                "status": fm.get("status", ""),
+                "description": fm.get("description", ""),
+                "resource": fm.get("resource", ""),
+                "tags": fm.get("tags", ""),
+                "project": fm.get("project", ""),
+                "id": fm.get("id", ""),
+            }
+        )
 
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(f"Exported {len(manifest['notes'])} notes to {out}")

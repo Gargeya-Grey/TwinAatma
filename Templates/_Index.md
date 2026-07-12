@@ -2,7 +2,6 @@
 type: index
 description: Index and operating rules for {{title}}.
 title: {{title}}
-description:
 schema: knowledgeos-v0.2
 status: active
 created: 2026-06-18
@@ -46,6 +45,10 @@ resource:
 - [Monthly Review](t-monthly-review.md)
 - [SOP / Process](t-sop.md)
 - [Person](t-person.md)
+
+## Cognitive / Self-model Templates
+- [Belief](t-belief.md) — optional claim + confidence + evidence
+- [Heuristic](t-heuristic.md) — promoted operating rule (see Concepts/heuristic-promotion-rules.md)
 
 ## Template Rule
 Templates are scaffolds only. They should not be counted as active KnowledgeOS content in weekly metrics.

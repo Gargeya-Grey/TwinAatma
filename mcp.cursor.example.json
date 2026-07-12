@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "knowledgeos": {
+      "command": "python",
+      "args": ["-m", "knowledgeos", "mcp"],
+      "cwd": "W:/AI-Projects/TwinAatma",
+      "env": {
+        "KNOWLEDGEOS_VAULT": "W:/AI-Projects/TwinAatma"
+      }
+    }
+  }
+}

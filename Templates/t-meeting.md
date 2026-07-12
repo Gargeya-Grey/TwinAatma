@@ -2,7 +2,6 @@
 type: meeting
 description: KnowledgeOS note for {{title}}.
 title: {{title}}
-description:
 schema: knowledgeos-v0.2
 status: draft
 created: {{date}}

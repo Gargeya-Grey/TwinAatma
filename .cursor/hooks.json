@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "python .cursor/hooks/twin_session_start.py"
+      }
+    ],
+    "sessionEnd": [
+      {
+        "command": "python .cursor/hooks/twin_session_end.py"
+      }
+    ]
+  }
+}

@@ -5,7 +5,7 @@ description: Decision log for Connect Notion as the Execution Layer for Knowledg
 schema: knowledgeos-v0.2
 status: active
 created: 2026-06-05
-updated: 2026-06-05
+updated: 2026-07-12
 tags: [notion, integration, knowledgeos, ops]
 project: KnowledgeOS
 timestamp: 2026-06-18T00:00:00Z
@@ -46,28 +46,28 @@ Connect Notion to KnowledgeOS using the Notion API (REST) via a Python bridge sc
 
 ## Actual Outcome
 
-The integration is fully operational as of 2026-06-18:
+The integration is operational. Credentials are **not stored in the repository**.
 
-- **API Key**: Stored in Hermes `.env` at `~/.hermes/.env` as `NOTION_API_KEY`
-- **Database**: "🧠 Idea Vault & Execution Engine" (ID: `42e1f487-0860-4366-b795-7a19c7b3bc8f`) — fully accessible via API
-- **19 entries** with columns: Idea, Category, Status, Priority, Next Action, Deadline, Date Captured, Note Type, Context, Obsidian Link
-- **Properties added**: `Obsidian Link` (URL) and `Note Type` (select) — both present in the database
+- **API Key**: Environment `NOTION_API_KEY`, optional Hermes `~/.hermes/.env`, or `knowledgeos.config.json`
+- **Database / data source ID**: Environment `NOTION_DATABASE_ID` / `NOTION_DATA_SOURCE_ID` or `knowledgeos.config.json` (see `knowledgeos.config.example.json`). **No hardcoded DB ID in code.**
+- **Properties**: Idea, Category, Status, Priority, Next Action, Deadline, Date Captured, Note Type, Context, Obsidian Link (names configurable via config)
 
 ### Scripts
 | Script | Purpose |
 |---|---|
-| `scripts/_notion_env.py` | Shared helper — auto-loads `NOTION_API_KEY` from Hermes `.env` |
+| `scripts/_notion_env.py` | Load Notion key + DB id from env / config / optional Hermes `.env` |
 | `scripts/notion_test.py` | Quick connectivity test — lists accessible pages |
 | `scripts/notion_inspect.py` | Inspect database schema + sample entries |
 | `scripts/notion_bridge.py` | Setup DB properties + publish single note to Notion |
-| `scripts/publish_to_notion.py` | Full pipeline: parse Obsidian frontmatter → publish to Notion if `status: refined` and `publish_to_notion: true` |
+| `scripts/publish_to_notion.py` | Full pipeline: parse Obsidian frontmatter → publish if `status: refined` and `publish_to_notion: true` |
 
 ### Key Design Notes
-- All scripts auto-load the env var from Hermes' `.env` file via `_notion_env.py` — no manual `export` needed
-- The publish gate (`status: refined, publish_to_notion: true`) prevents drafts from leaking
-- Category mapping is tag-based (e.g. `ai` → `AI/Agents`, `gtm` → `GTM`, `product` → `Platform`)
+- Publish gate (`status: refined`, `publish_to_notion: true`) prevents drafts from leaking
+- Category / property maps live in `knowledgeos.config.json` (optional overrides)
 - Obsidian Link is preserved so each Notion entry points back to its source note
+- **Addendum 2026-07-12:** KnowledgeOS MCP (Phase 3) is **in-scope** as the agent memory interface — see [KnowledgeOS MCP Memory Server](knowledgeos-mcp-memory-server.md). Notion MCP remains optional/out-of-scope for execution publishing.
 
 ### Next Steps
-- Add a `--all` cron job to auto-publish refined notes weekly
-- Consider Notion → Obsidian sync for status updates (Notion as execution, Obsidian as source of truth)
+- Keep Notion fully config-driven (done in P0)
+- Consider Notion → Obsidian sync for status updates later
+- KnowledgeOS Memory MCP arrives in Phase 3 of the strategic plan

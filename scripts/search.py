@@ -1,37 +1,55 @@
 #!/usr/bin/env python
-"""KnowledgeOS agentic search using the SQLite index plus direct content search."""
+"""KnowledgeOS search — metadata + FTS5 body index (blended ranking)."""
 from __future__ import annotations
-import sqlite3, sys
+
+import json
+import sys
 from pathlib import Path
+
 VAULT_DIR = Path(__file__).resolve().parent.parent
+if str(VAULT_DIR) not in sys.path:
+    sys.path.insert(0, str(VAULT_DIR))
+
+from knowledgeos.search import blended_search  # noqa: E402
+
 DB = VAULT_DIR / "knowledge_index.db"
-query = " ".join(sys.argv[1:]).strip()
-if not query:
-    print("Usage: python scripts/search.py <search query>")
-    raise SystemExit(1)
-conn = sqlite3.connect(DB, timeout=30.0)
-cur = conn.cursor()
-like = f"%{query}%"
-print("=== KnowledgeOS Search ===")
-print(f"Query: {query}\n")
-sections = [
-    ("Direct Title Matches", "SELECT title, path, type, status FROM notes WHERE title LIKE ? ORDER BY type, title", (like,)),
-    ("Tag Matches", "SELECT title, path, tags FROM notes WHERE tags LIKE ? ORDER BY title", (like,)),
-    ("Project Matches", "SELECT title, path, project FROM notes WHERE project LIKE ? ORDER BY title", (like,)),
-    ("Linked Notes", """
-        SELECT DISTINCT n.title, n.path, n.type, n.status
-        FROM notes n JOIN links l ON n.path = l.destination
-        WHERE l.source IN (SELECT path FROM notes WHERE title LIKE ? OR tags LIKE ? OR project LIKE ?)
-        ORDER BY n.type, n.title LIMIT 30
-    """, (like, like, like)),
-    ("Recent Related Activity", "SELECT title, path, updated FROM notes WHERE (title LIKE ? OR tags LIKE ? OR project LIKE ?) AND updated != '' ORDER BY updated DESC LIMIT 10", (like, like, like)),
-]
-for title, sql, params in sections:
-    print(f"--- {title} ---")
-    rows = cur.execute(sql, params).fetchall()
-    if rows:
-        for row in rows:
-            print(" | ".join(str(x) for x in row))
-    else:
+
+
+def main() -> int:
+    query = " ".join(sys.argv[1:]).strip()
+    if not query:
+        print("Usage: python scripts/search.py <search query>")
+        return 1
+    result = blended_search(DB, query, limit=20)
+    if result.get("error"):
+        print(result["error"], file=sys.stderr)
+        return 1
+
+    print("=== KnowledgeOS Search ===")
+    print(f"Query: {query}")
+    print(f"Mode: {result.get('mode')} | FTS available: {result.get('fts_available')}\n")
+
+    print("--- Ranked (blended) ---")
+    ranked = result.get("ranked") or []
+    if not ranked:
         print("(none)")
-    print()
+    for row in ranked:
+        snip = (row.get("snippet") or "").replace("\n", " ")[:120]
+        line = f"{row.get('score')} | {row.get('title')} | {row.get('path')} | {row.get('source')} | {snip}"
+        print(line.encode("utf-8", errors="replace").decode("utf-8", errors="replace"))
+
+    print("\n--- FTS body hits ---")
+    fts = result.get("fts") or []
+    if not fts:
+        print("(none)" if result.get("fts_available") else "(FTS index missing — run rebuild_index.py)")
+    for row in fts:
+        line = f"{row.get('title')} | {row.get('path')} | {row.get('snippet')}"
+        print(line.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(sys.stdout.encoding or "utf-8", errors="replace"))
+
+    if "--json" in sys.argv:
+        print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

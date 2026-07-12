@@ -26,6 +26,14 @@ This is the root hub. Every note should be reachable from one of these maps.
 - [Ecosystem / Cross-Domain Links](_MOC_Ecosystem.md)
 - [Experiments Dashboard](_MOC_Experiments.md)
 
+## Generated Intelligence Views
+- [Outcomes](_MOC_Outcomes.md)
+- [Stale Projects](_MOC_Stale_Projects.md)
+- [Orphan Notes](_MOC_Orphans.md)
+- [Belief Reviews](_MOC_Belief_Reviews.md)
+- [Emerging Themes](_MOC_Emerging_Themes.md)
+- [Tensions](_MOC_Tensions.md)
+
 ## By Type
 - Concepts: [Concepts Index](../Concepts/_Index.md)
 - Projects: [Projects Index](../Projects/_Index.md)
@@ -37,15 +45,18 @@ This is the root hub. Every note should be reachable from one of these maps.
 
 ## Operating Loop
 ```text
-Capture → Clarify → Connect → Commit → Execute → Review → Synthesize
+Capture → Clarify → Connect → Decide → Execute → Record Outcome → Review → Update Self
 ```
 
 ## Automation Commands
 | Command | Purpose |
 |---|---|
 | `python scripts/doctor.py` | Run diagnostic environment checks |
-| `python scripts/rebuild_index.py` | Rebuild SQLite index |
-| `python scripts/search.py "query"` | Search vault |
+| `python scripts/rebuild_index.py` | Rebuild SQLite + FTS5 index |
+| `python scripts/search.py "query"` | Blended metadata + FTS search |
+| `python scripts/intelligence_brief.py` | Weekly intelligence brief |
+| `python scripts/learning_trajectory.py` | How thinking changed |
+| `python scripts/update_mocs.py` | Refresh generated dashboards |
 | `python scripts/weekly_data.py` | Weekly metrics |
 | `python scripts/daily_capture_report.py` | Inbox processing report |
 | `python scripts/refinement_report.py` | Refinement candidates |
