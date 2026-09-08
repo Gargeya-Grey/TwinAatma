@@ -15,11 +15,11 @@ STARTER_DIRS = [
     "Research/Synthesis",
     "Decisions",
     "People",
+    "People/Self-Proposals",
     "MOCs",
     "Templates",
     "Assets",
     "Archive",
-    "scripts",
 ]
 
 
@@ -146,38 +146,40 @@ def init_vault(
     for d in STARTER_DIRS:
         (target / d).mkdir(parents=True, exist_ok=True)
 
-    # Copy templates from toolkit
+    # Copy note templates only — vaults are data-only, no code is copied.
+    # The twinaatma binary (or python -m knowledgeos) operates on the vault
+    # via --vault / KNOWLEDGEOS_VAULT / walk-up resolution.
     src_templates = source_root / "Templates"
     dst_templates = target / "Templates"
     if src_templates.exists():
         for item in src_templates.glob("*.md"):
             shutil.copy2(item, dst_templates / item.name)
 
-    # Copy core scripts (stdlib toolkit)
-    src_scripts = source_root / "scripts"
-    dst_scripts = target / "scripts"
-    if src_scripts.exists():
-        for item in src_scripts.glob("*.py"):
-            shutil.copy2(item, dst_scripts / item.name)
-        for item in src_scripts.glob("*.sh"):
-            shutil.copy2(item, dst_scripts / item.name)
+    # Vault marker: identifies this dir as a TwinAatma vault for walk-up.
+    from knowledgeos import __version__ as _toolkit_version
 
-    # Copy knowledgeos package
-    src_pkg = source_root / "knowledgeos"
-    dst_pkg = target / "knowledgeos"
-    if src_pkg.exists():
-        if dst_pkg.exists():
-            shutil.rmtree(dst_pkg)
-        shutil.copytree(
-            src_pkg,
-            dst_pkg,
-            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
-        )
+    marker = {
+        "vault": "twinaatma",
+        "schema": "knowledgeos-v0.3",
+        "toolkit_min_version": _toolkit_version,
+        "created": today,
+    }
+    (target / ".knowledgeos-vault.json").write_text(
+        json.dumps(marker, indent=2), encoding="utf-8"
+    )
 
-    # Config example
+    # Rendered config (not just the example) so hosts/tools work out of the box.
     example = source_root / "knowledgeos.config.example.json"
     if example.exists():
+        try:
+            cfg = json.loads(example.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            cfg = {"schema": "knowledgeos-v0.3", "mcp": {"enabled": True}}
         shutil.copy2(example, target / "knowledgeos.config.example.json")
+        if not (target / "knowledgeos.config.json").exists():
+            (target / "knowledgeos.config.json").write_text(
+                json.dumps(cfg, indent=2), encoding="utf-8"
+            )
 
     license_src = source_root / "LICENSE"
     if license_src.exists():
@@ -187,9 +189,12 @@ def init_vault(
     agents_src = source_root / "AGENTS.md"
     if agents_src.exists():
         shutil.copy2(agents_src, target / "AGENTS.md")
-    mcp_ex = source_root / "mcp.cursor.example.json"
-    if mcp_ex.exists():
-        shutil.copy2(mcp_ex, target / "mcp.cursor.example.json")
+    # Generated host config with the real vault path (no hardcoded placeholders).
+    from knowledgeos.host_setup import build_config
+
+    (target / "mcp.cursor.json").write_text(
+        json.dumps(build_config("cursor", target), indent=2), encoding="utf-8"
+    )
     src_rules = source_root / ".cursor" / "rules"
     if src_rules.exists():
         dst_rules = target / ".cursor" / "rules"
@@ -253,7 +258,6 @@ def init_vault(
 
 ## This Week
 - Capture into Inbox
-- Run `python scripts/daily_capture_report.py`
 - Review Self.md Active Bets
 """,
         ),
@@ -268,7 +272,8 @@ def init_vault(
 Portable cognitive memory: markdown you own, agents can load, Self-model that compounds.
 
 ## User setup (once)
-Wire the KnowledgeOS MCP server (see `mcp.cursor.example.json`). After that, just chat —
+Run `twinaatma setup-host --host cursor --vault .` (or copy `mcp.cursor.json`
+into your MCP settings). After that, just chat —
 agents follow `AGENTS.md` and keep the twin current. You should not need to remember commands.
 
 ## Loop (agent-owned)
@@ -294,12 +299,14 @@ Technical toolkit: `knowledgeos` (CLI/package). Public brand: TwinAatma *(Twin-A
 
 ## Promise
 
-Wire MCP once (`mcp.cursor.example.json`). Then just chat. Agents follow [AGENTS.md](AGENTS.md)
+Wire MCP once (`twinaatma setup-host --host cursor --vault .`, or copy
+`mcp.cursor.json` into your MCP settings). Then just chat. Agents follow [AGENTS.md](AGENTS.md)
 and keep your twin current — you should not need toolkit commands for normal use.
 
 ## One-time agent wiring (Cursor)
 
-Copy from `mcp.cursor.example.json` into your MCP settings; set `KNOWLEDGEOS_VAULT` to this folder.
+`mcp.cursor.json` was generated for this vault path. If you move the vault,
+re-run `twinaatma setup-host --host cursor --vault .` and set `KNOWLEDGEOS_VAULT` to this folder.
 
 ## Identity
 
@@ -328,42 +335,52 @@ Assets/papers/
         "vault": str(target),
         "owner": owner_name,
         "created": today,
+        "data_only": True,
         "next_steps": [
             f"cd {target}",
-            "Wire MCP once using mcp.cursor.example.json (set KNOWLEDGEOS_VAULT to this folder)",
+            "Wire MCP once: twinaatma setup-host --host cursor --vault .  (or python -m knowledgeos setup-host ...)",
             "Open the vault in Cursor — hooks + AGENTS.md keep the twin autopilot alive",
             "Chat normally — agents call memory_session_start; you only answer soft yes/no when asked",
-            "Optional: python scripts/onboarding.py  # first Self interview",
         ],
     }
 
-    # Best-effort post-init rebuild + validate
-    import subprocess
-    import sys
-
+    # Best-effort post-init rebuild + validate (in-process, no subprocess,
+    # no scripts/ inside the new vault — operate via vault path).
     post = {"rebuild": None, "validate": None}
     try:
-        r1 = subprocess.run(
-            [sys.executable, str(target / "scripts" / "rebuild_index.py")],
-            cwd=str(target),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        post["rebuild"] = {"ok": r1.returncode == 0, "stdout": (r1.stdout or "")[-500:]}
+        import runpy
+
+        import os as _os
+
+        _old = _os.environ.get("KNOWLEDGEOS_VAULT")
+        _os.environ["KNOWLEDGEOS_VAULT"] = str(target)
+        try:
+            runpy.run_path(
+                str(source_root / "scripts" / "rebuild_index.py"),
+                run_name="__main__",
+            )
+            post["rebuild"] = {"ok": True}
+        except SystemExit as e:
+            post["rebuild"] = {"ok": e.code in (None, 0)}
+        except Exception as e:
+            post["rebuild"] = {"ok": False, "error": str(e)}
+        try:
+            runpy.run_path(
+                str(source_root / "scripts" / "validate_schema.py"),
+                run_name="__main__",
+            )
+            post["validate"] = {"ok": True}
+        except SystemExit as e:
+            post["validate"] = {"ok": e.code in (None, 0)}
+        except Exception as e:
+            post["validate"] = {"ok": False, "error": str(e)}
+        finally:
+            if _old is None:
+                _os.environ.pop("KNOWLEDGEOS_VAULT", None)
+            else:
+                _os.environ["KNOWLEDGEOS_VAULT"] = _old
     except Exception as e:
         post["rebuild"] = {"ok": False, "error": str(e)}
-    try:
-        r2 = subprocess.run(
-            [sys.executable, str(target / "scripts" / "validate_schema.py")],
-            cwd=str(target),
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        post["validate"] = {"ok": r2.returncode == 0, "stdout": (r2.stdout or "")[-800:]}
-    except Exception as e:
-        post["validate"] = {"ok": False, "error": str(e)}
 
     result["post_init"] = post
     (target / ".knowledgeos-init.json").write_text(json.dumps(result, indent=2), encoding="utf-8")

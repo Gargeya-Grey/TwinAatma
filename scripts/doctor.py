@@ -11,6 +11,21 @@ import sys
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
+import os as _os
+
+_env_vault = _os.environ.get("KNOWLEDGEOS_VAULT")
+if _env_vault:
+    VAULT_DIR = Path(_env_vault).expanduser().resolve()
+else:
+    for _a in sys.argv:
+        if _a.startswith("--vault="):
+            VAULT_DIR = Path(_a.split("=", 1)[1]).expanduser().resolve()
+            break
+if "--vault" in sys.argv:
+    try:
+        VAULT_DIR = Path(sys.argv[sys.argv.index("--vault") + 1]).expanduser().resolve()
+    except (IndexError, ValueError):
+        pass
 DB = VAULT_DIR / "knowledge_index.db"
 
 REQUIRED_DIRS = [

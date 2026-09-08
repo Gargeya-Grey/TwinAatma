@@ -1,11 +1,12 @@
 {
+  "$comment": "Do NOT edit paths here — generate a real config with: twinaatma setup-host --host cursor --vault <your-vault> (or: python -m knowledgeos setup-host --host cursor --vault <your-vault>)",
   "mcpServers": {
     "knowledgeos": {
       "command": "python",
-      "args": ["-m", "knowledgeos", "mcp"],
-      "cwd": "W:/AI-Projects/TwinAatma",
+      "args": ["-m", "knowledgeos", "mcp", "--vault", "<YOUR-VAULT-PATH>"],
+      "cwd": "<YOUR-VAULT-PATH>",
       "env": {
-        "KNOWLEDGEOS_VAULT": "W:/AI-Projects/TwinAatma"
+        "KNOWLEDGEOS_VAULT": "<YOUR-VAULT-PATH>"
       }
     }
   }

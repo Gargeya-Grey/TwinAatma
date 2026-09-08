@@ -10,9 +10,25 @@ import re
 import sys
 from pathlib import Path
 
-VAULT_DIR = Path(__file__).resolve().parent.parent
-if str(VAULT_DIR) not in sys.path:
-    sys.path.insert(0, str(VAULT_DIR))
+TOOLKIT_DIR = Path(__file__).resolve().parent.parent
+VAULT_DIR = TOOLKIT_DIR
+import os as _os
+
+_env_vault = _os.environ.get("KNOWLEDGEOS_VAULT")
+if _env_vault:
+    VAULT_DIR = Path(_env_vault).expanduser().resolve()
+elif "--vault" in sys.argv:
+    try:
+        VAULT_DIR = Path(sys.argv[sys.argv.index("--vault") + 1]).expanduser().resolve()
+    except (IndexError, ValueError):
+        pass
+# Toolkit first (data-only vaults have no knowledgeos/ package); vault copy
+# only for old copy-tree vaults.
+if str(TOOLKIT_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLKIT_DIR))
+if VAULT_DIR != TOOLKIT_DIR and (VAULT_DIR / "knowledgeos").exists():
+    if str(VAULT_DIR) not in sys.path:
+        sys.path.insert(0, str(VAULT_DIR))
 
 from knowledgeos.links import extract_raw_links  # noqa: E402
 from knowledgeos.parser import parse_frontmatter  # noqa: E402
@@ -27,7 +43,7 @@ from knowledgeos.schema import (  # noqa: E402
     SCHEMA_V03,
 )
 
-SKIP_DIRS = {".git", "node_modules", "Archive", "__pycache__", ".knowledgeos", ".cursor", "docs"}
+SKIP_DIRS = {".git", "node_modules", "Archive", "__pycache__", ".knowledgeos", ".cursor", ".commandcode", "docs"}
 SKIP_ROOT_FILES = {
     "readme.md",
     "license",

@@ -37,16 +37,21 @@ Obsidian is recommended for humans. Notion and Hermes are optional. Brand decisi
 python -m knowledgeos mcp
 ```
 
-Cursor example: [`mcp.cursor.example.json`](mcp.cursor.example.json)
+Cursor example: [`mcp.cursor.example.json`](mcp.cursor.example.json) — paths are
+placeholders; generate a real one with:
+
+```bash
+python -m knowledgeos setup-host --host cursor --vault <YOUR-VAULT-PATH>
+```
 
 ```json
 {
   "mcpServers": {
     "knowledgeos": {
       "command": "python",
-      "args": ["-m", "knowledgeos", "mcp"],
-      "cwd": "W:/AI-Projects/TwinAatma",
-      "env": { "KNOWLEDGEOS_VAULT": "W:/AI-Projects/TwinAatma" }
+      "args": ["-m", "knowledgeos", "mcp", "--vault", "<YOUR-VAULT-PATH>"],
+      "cwd": "<YOUR-VAULT-PATH>",
+      "env": { "KNOWLEDGEOS_VAULT": "<YOUR-VAULT-PATH>" }
     }
   }
 }

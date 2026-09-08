@@ -9,15 +9,28 @@ import hashlib, os, re, sqlite3, sys, urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-VAULT_DIR = Path(__file__).resolve().parent.parent
-if str(VAULT_DIR) not in sys.path:
-    sys.path.insert(0, str(VAULT_DIR))
+TOOLKIT_DIR = Path(__file__).resolve().parent.parent
+VAULT_DIR = TOOLKIT_DIR
+_env_vault = os.environ.get("KNOWLEDGEOS_VAULT")
+if _env_vault:
+    VAULT_DIR = Path(_env_vault).expanduser().resolve()
+elif "--vault" in sys.argv:
+    try:
+        VAULT_DIR = Path(sys.argv[sys.argv.index("--vault") + 1]).expanduser().resolve()
+    except (IndexError, ValueError):
+        pass
+# Toolkit first (data-only vaults have no knowledgeos/ package); vault copy
+# only for old copy-tree vaults.
+if str(TOOLKIT_DIR) not in sys.path:
+    sys.path.insert(0, str(TOOLKIT_DIR))
+if VAULT_DIR != TOOLKIT_DIR and (VAULT_DIR / "knowledgeos").exists():
+    if str(VAULT_DIR) not in sys.path:
+        sys.path.insert(0, str(VAULT_DIR))
 
+from knowledgeos.links import extract_raw_links  # noqa: E402
 from knowledgeos.parser import parse_frontmatter, split_frontmatter  # noqa: E402
 
 DB = VAULT_DIR / "knowledge_index.db"
-WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)")
 
 def title_from_note(path: Path, text: str, fm: dict) -> str:
     if fm.get("title"):
@@ -28,35 +41,15 @@ def title_from_note(path: Path, text: str, fm: dict) -> str:
     return path.stem
 
 def build_note_lookup(md_files):
-    lookup = {}
-    for path in md_files:
-        rel = path.relative_to(VAULT_DIR).as_posix()
-        stem = path.stem
-        lookup[rel.lower()] = rel
-        lookup[rel[:-3].lower()] = rel
-        lookup[stem.lower()] = rel
-        # Also allow folder/name without .md and aliases based on headings later if needed.
-    return lookup
+    from knowledgeos.links import build_note_lookup as _build
+
+    return _build(md_files, VAULT_DIR)
+
 
 def normalize_link(raw: str, source_rel: str, lookup: dict) -> str:
-    target = urllib.parse.unquote(raw.split("|", 1)[0].split("#", 1)[0].strip())
-    if not target:
-        return raw.strip()
-    target = target.replace("\\", "/")
-    source_dir = str(Path(source_rel).parent).replace("\\", "/")
-    candidates = []
-    if target.endswith(".md"):
-        candidates.append(target)
-    else:
-        candidates.extend([target, target + ".md"])
-    if source_dir and source_dir != ".":
-        candidates.extend([f"{source_dir}/{c}" for c in list(candidates)])
-    for c in candidates:
-        norm = os.path.normpath(c).replace("\\", "/")
-        hit = lookup.get(norm.lower()) or lookup.get(norm[:-3].lower() if norm.endswith('.md') else norm.lower())
-        if hit:
-            return hit
-    return target
+    from knowledgeos.links import normalize_link as _normalize
+
+    return _normalize(raw, source_rel, lookup)
 
 def process_file_worker(args):
     path, db_notes, lookup = args
@@ -100,12 +93,7 @@ def process_file_worker(args):
         if isinstance(lesson, list):
             lesson = "; ".join(str(x) for x in lesson)
         
-        raw_links = []
-        for raw in WIKILINK_RE.findall(text):
-            raw_links.append(raw)
-        for raw in MARKDOWN_LINK_RE.findall(text):
-            if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#")):
-                raw_links.append(raw)
+        raw_links = extract_raw_links(text)
                 
         resolved_links = []
         for raw in sorted(set(raw_links)):
@@ -256,6 +244,7 @@ def main():
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_rebuild_link_count', ?)", (str(link_count),))
     cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES ('last_fts_updates', ?)", (str(fts_updates),))
     conn.commit()
+    conn.close()
     print("Rebuilding KnowledgeOS index...")
     print(f"Vault: {VAULT_DIR}")
     print(f"DB: {DB}")

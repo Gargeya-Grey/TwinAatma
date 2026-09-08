@@ -15,6 +15,14 @@ __pycache__/
 *.pyd
 .pytest_cache/
 
+# Agent session permissions (machine-local command history)
+.commandcode/
+
+# PyInstaller build output
+build/
+dist/
+*.spec.bak
+
 # Local database (generated automatically via scripts)
 knowledge_index.db
 

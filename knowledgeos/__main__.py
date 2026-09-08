@@ -11,11 +11,25 @@ def _root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
+def _default_vault() -> Path:
+    from knowledgeos.vault_resolve import resolve_vault
+
+    return resolve_vault()
+
+
+def resolve_vault_cli(explicit: Path | None) -> Path:
+    from knowledgeos.vault_resolve import resolve_vault
+
+    return resolve_vault(explicit)
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] in {"-h", "--help", "help"}:
+        from knowledgeos import __version__
+
         print(
-            "KnowledgeOS CLI (v0.3-dev)\n\n"
+            f"KnowledgeOS CLI (v{__version__})\n\n"
             "Commands:\n"
             "  doctor                Run environment diagnostics\n"
             "  validate              Validate vault schema\n"
@@ -25,6 +39,7 @@ def main(argv: list[str] | None = None) -> int:
             "  memory <tool>         Call Memory API tools (CLI fallback for MCP)\n"
             "  breathe               Autopilot tick (freshen + load + soft prompts)\n"
             "  mcp                   Start MCP Memory server (stdio)\n"
+            "  setup-host            Generate MCP host config for a vault\n"
             "  version               Print package version\n"
         )
         return 0
@@ -40,14 +55,30 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if cmd == "doctor":
+        import os
         import runpy
 
+        rest = argv[1:]
+        vault = _default_vault()
+        if "--vault" in rest:
+            idx = rest.index("--vault")
+            if idx + 1 < len(rest):
+                vault = Path(rest[idx + 1]).expanduser().resolve()
+        os.environ["KNOWLEDGEOS_VAULT"] = str(vault)
         runpy.run_path(str(scripts / "doctor.py"), run_name="__main__")
         return 0
 
     if cmd == "validate":
+        import os
         import runpy
 
+        rest = argv[1:]
+        vault = _default_vault()
+        if "--vault" in rest:
+            idx = rest.index("--vault")
+            if idx + 1 < len(rest):
+                vault = Path(rest[idx + 1]).expanduser().resolve()
+        os.environ["KNOWLEDGEOS_VAULT"] = str(vault)
         runpy.run_path(str(scripts / "validate_schema.py"), run_name="__main__")
         return 0
 
@@ -69,8 +100,17 @@ def main(argv: list[str] | None = None) -> int:
     if cmd == "mcp":
         return _cmd_mcp(argv[1:], root)
 
+    if cmd == "setup-host":
+        return _cmd_setup_host(argv[1:], root)
+
     print(f"Unknown command: {cmd}", file=sys.stderr)
     return 1
+
+
+def _cmd_setup_host(argv: list[str], root: Path) -> int:
+    from knowledgeos.host_setup import main as setup_main
+
+    return setup_main(argv)
 
 
 def _cmd_ids(argv: list[str], root: Path) -> int:
@@ -79,14 +119,15 @@ def _cmd_ids(argv: list[str], root: Path) -> int:
         return 1
     parser = argparse.ArgumentParser(prog="knowledgeos ids assign")
     parser.add_argument("--write", action="store_true", help="Write IDs into note frontmatter")
-    parser.add_argument("--vault", type=Path, default=root, help="Vault root (default: repo root)")
+    parser.add_argument("--vault", type=Path, default=None, help="Vault root (default: resolved)")
     parser.add_argument("--include-existing", action="store_true", help="Also rewrite notes that already have ids")
     args = parser.parse_args(argv[1:])
 
     from knowledgeos.ids import assign_ids_for_vault
+    from knowledgeos.vault_resolve import resolve_vault
 
     changes = assign_ids_for_vault(
-        args.vault.resolve(),
+        resolve_vault(args.vault),
         write=args.write,
         only_missing=not args.include_existing,
     )
@@ -101,9 +142,13 @@ def _cmd_self(argv: list[str], root: Path) -> int:
         print("Usage: python -m knowledgeos self summary [--path People/Self.md]", file=sys.stderr)
         return 1
     parser = argparse.ArgumentParser(prog="knowledgeos self summary")
-    parser.add_argument("--path", type=Path, default=root / "People" / "Self.md")
+    parser.add_argument("--path", type=Path, default=None)
+    parser.add_argument("--vault", type=Path, default=None)
     args = parser.parse_args(argv[1:])
-    path = args.path if args.path.is_absolute() else (root / args.path)
+    if args.path:
+        path = args.path if args.path.is_absolute() else (resolve_vault_cli(args.vault) / args.path)
+    else:
+        path = resolve_vault_cli(args.vault) / "People" / "Self.md"
     if not path.exists():
         print(f"Self note not found: {path}", file=sys.stderr)
         return 1
@@ -135,17 +180,10 @@ def _cmd_init(argv: list[str], root: Path) -> int:
     except Exception as e:
         print(f"init failed: {e}", file=sys.stderr)
         return 1
-    # Append MCP snippet
-    result["mcp_cursor_config"] = {
-        "mcpServers": {
-            "knowledgeos": {
-                "command": "python",
-                "args": ["-m", "knowledgeos", "mcp"],
-                "cwd": result["vault"],
-                "env": {"KNOWLEDGEOS_VAULT": result["vault"]},
-            }
-        }
-    }
+    # Append MCP snippet (dynamic, no hardcoded paths)
+    from knowledgeos.host_setup import build_config
+
+    result["mcp_cursor_config"] = build_config("cursor", Path(result["vault"]))
     print(json.dumps(result, indent=2))
     return 0
 
@@ -165,7 +203,7 @@ def _cmd_memory(argv: list[str], root: Path) -> int:
 
     parser = argparse.ArgumentParser(prog="knowledgeos memory")
     parser.add_argument("tool")
-    parser.add_argument("--vault", type=Path, default=root)
+    parser.add_argument("--vault", type=Path, default=None)
     parser.add_argument("--args", default="{}", help="JSON object of tool arguments")
     parser.add_argument("--path", default="", help="Shorthand for accept_self_update proposal path")
     # convenience flags for common tools
@@ -208,7 +246,7 @@ def _cmd_memory(argv: list[str], root: Path) -> int:
     if args.path:
         payload.setdefault("proposal_path", args.path)
 
-    api = MemoryAPI(args.vault.resolve())
+    api = MemoryAPI(resolve_vault_cli(args.vault))
     result = dispatch(api, args.tool, payload)
     print(json.dumps(result, indent=2, default=str))
     return 1 if isinstance(result, dict) and result.get("error") else 0
@@ -216,13 +254,14 @@ def _cmd_memory(argv: list[str], root: Path) -> int:
 
 def _cmd_breathe(argv: list[str], root: Path) -> int:
     parser = argparse.ArgumentParser(prog="knowledgeos breathe")
-    parser.add_argument("--vault", type=Path, default=root)
+    parser.add_argument("--vault", type=Path, default=None)
     parser.add_argument("--task-hint", default="")
     parser.add_argument("--limit", type=int, default=8)
     args = parser.parse_args(argv)
     from knowledgeos.memory import MemoryAPI
+    from knowledgeos.vault_resolve import resolve_vault
 
-    api = MemoryAPI(args.vault.resolve())
+    api = MemoryAPI(resolve_vault(args.vault))
     result = api.session_start(args.task_hint, args.limit)
     print(json.dumps(result, indent=2, default=str))
     return 0
@@ -230,7 +269,7 @@ def _cmd_breathe(argv: list[str], root: Path) -> int:
 
 def _cmd_mcp(argv: list[str], root: Path) -> int:
     parser = argparse.ArgumentParser(prog="knowledgeos mcp")
-    parser.add_argument("--vault", type=Path, default=root)
+    parser.add_argument("--vault", type=Path, default=None)
     parser.add_argument(
         "--framing",
         choices=["content-length", "ndjson"],
@@ -238,7 +277,9 @@ def _cmd_mcp(argv: list[str], root: Path) -> int:
         help="stdio framing (default: content-length for Cursor/Claude Desktop)",
     )
     args = parser.parse_args(argv)
-    vault = args.vault.resolve()
+    from knowledgeos.vault_resolve import resolve_vault
+
+    vault = resolve_vault(args.vault)
     from knowledgeos.mcp_server import run_stdio, run_stdio_content_length
 
     if args.framing == "ndjson":

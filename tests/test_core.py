@@ -57,10 +57,16 @@ class InitSmokeTests(unittest.TestCase):
             target = Path(tmp) / "brain"
             result = init_vault(target, source_root=ROOT, owner_name="Test", non_interactive=True)
             self.assertTrue((target / "People" / "Self.md").exists())
-            self.assertTrue((target / "knowledgeos" / "parser.py").exists())
+            self.assertTrue((target / ".knowledgeos-vault.json").exists())
+            self.assertTrue((target / "knowledgeos.config.json").exists())
+            self.assertTrue((target / "mcp.cursor.json").exists())
+            self.assertFalse((target / "knowledgeos").exists())
+            self.assertFalse((target / "scripts").exists())
+            self.assertFalse((target / "mcp.cursor.example.json").exists())
             self.assertTrue((target / "AGENTS.md").exists())
             self.assertTrue((target / ".cursor" / "rules" / "knowledgeos-twin.mdc").exists())
             self.assertEqual(result["owner"], "Test")
+            self.assertTrue(result.get("data_only"))
             # post_init rebuild may succeed in temp vault
             self.assertIn("post_init", result)
 

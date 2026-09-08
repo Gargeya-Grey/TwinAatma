@@ -20,11 +20,9 @@ def _log(msg: str) -> None:
 
 
 def _vault_from_env() -> Path:
-    env = os.environ.get("KNOWLEDGEOS_VAULT")
-    if env:
-        return Path(env).resolve()
-    # Default: package parent (toolkit / vault root)
-    return Path(__file__).resolve().parent.parent
+    from knowledgeos.vault_resolve import resolve_vault
+
+    return resolve_vault()
 
 
 class MCPServer:
@@ -44,6 +42,7 @@ class MCPServer:
             return None
 
         if method == "initialize":
+            from knowledgeos import __version__
             from knowledgeos.autopilot import AGENT_INSTRUCTIONS_COMPACT
 
             return {
@@ -54,7 +53,7 @@ class MCPServer:
                     "capabilities": {"tools": {}},
                     "serverInfo": {
                         "name": "knowledgeos-memory",
-                        "version": "0.4.0-dev",
+                        "version": __version__,
                     },
                     "instructions": AGENT_INSTRUCTIONS_COMPACT,
                 },

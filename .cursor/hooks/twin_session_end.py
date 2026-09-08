@@ -1,14 +1,18 @@
 #!/usr/bin/env python
-"""Mark orphan sessions so the next breath can soft-prompt to keep unfinished work."""
+"""Mark orphan sessions so the next breath can soft-prompt to keep unfinished work.
+
+Data-only safe: only touches .knowledgeos/autopilot.json state in the vault
+(workspace root). Never imports the toolkit.
+"""
 from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+VAULT = Path(__file__).resolve().parents[2]
+STATE_FILE = VAULT / ".knowledgeos" / "autopilot.json"
 
 
 def main() -> int:
@@ -18,9 +22,13 @@ def main() -> int:
     except Exception:
         pass
     try:
-        from knowledgeos.autopilot import mark_orphan_if_open
-
-        mark_orphan_if_open(ROOT)
+        if STATE_FILE.exists():
+            state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+            if state.get("session_open") and not state.get("session_ended"):
+                state["orphan_unsaved_session"] = True
+                state["session_open"] = False
+                state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
     except Exception:
         pass
     print("{}")

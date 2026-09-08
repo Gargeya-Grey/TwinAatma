@@ -1,18 +1,40 @@
 #!/usr/bin/env python
-"""Pre-warm TwinAatma autopilot when a Cursor chat starts."""
+"""Pre-warm TwinAatma autopilot when a Cursor chat starts.
+
+Works with data-only vaults: prefers the `twinaatma` binary on PATH,
+falls back to `python -m knowledgeos` when the toolkit is importable.
+Vault is the workspace root (parents[2] of this hook). Best-effort —
+the agent must still call memory_session_start via MCP.
+"""
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+VAULT = Path(__file__).resolve().parents[2]
+
+
+def _run_breathe() -> dict:
+    exe = shutil.which("twinaatma")
+    if exe:
+        cmd = [exe, "breathe", "--vault", str(VAULT), "--limit", "6"]
+    else:
+        cmd = [sys.executable, "-m", "knowledgeos", "breathe", "--vault", str(VAULT), "--limit", "6"]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if proc.returncode == 0 and proc.stdout.strip():
+            data = json.loads(proc.stdout)
+            if isinstance(data, dict):
+                return data
+    except Exception:
+        pass
+    return {}
 
 
 def main() -> int:
-    # Consume stdin (sessionStart payload) so the pipe does not block
     try:
         raw = sys.stdin.read()
         _ = json.loads(raw) if raw.strip() else {}
@@ -27,23 +49,17 @@ def main() -> int:
         "If soft_prompt is returned, ask it once in plain language "
         '("Want me to remember that?"). Do not name TwinAatma/KnowledgeOS/hooks/scripts to the user.'
     )
-    try:
-        from knowledgeos.autopilot import breathe
-        from knowledgeos.memory import MemoryAPI
-
-        api = MemoryAPI(ROOT)
-        hint = ""
-        result = breathe(api, task_hint=hint, limit=6)
+    result = _run_breathe()
+    if result:
         soft = result.get("soft_prompt")
         if soft:
             additional += f" Pending soft prompt from autopilot: {soft}"
         actions = result.get("actions_taken") or []
         if actions:
             additional += f" Autopilot already ran: {', '.join(actions)}."
-    except Exception as e:
-        additional += f" (Pre-warm note: {e}. Still call memory_session_start.)"
+    else:
+        additional += " (Pre-warm unavailable. Still call memory_session_start.)"
 
-    # additional_context may be dropped by some Cursor builds; side effects still ran.
     print(json.dumps({"additional_context": additional}))
     return 0
 
