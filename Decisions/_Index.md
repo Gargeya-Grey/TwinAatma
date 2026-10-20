@@ -6,16 +6,17 @@ schema: knowledgeos-v0.2
 status: active
 tags: [decisions, index]
 created: 2026-06-05
-updated: 2026-07-12
-timestamp: 2026-07-12T00:00:00Z
+updated: 2026-10-17
+timestamp: 2026-10-17T00:00:00Z
 ---
 # Decisions Index
 
 Decisions are first-class citizens. Log choices that affect strategy, architecture, scope, priority, money, or time.
 
 ## Existing Decisions
+- [Self gate is a ledger boundary, index freshness is a manifest](self-gate-and-index-integrity.md) — **current architecture; supersedes convention-based gates**
 - [Public brand is TwinAatma](public-brand-twinaatma.md) — **human-facing name; internals stay knowledgeos**
-- [KnowledgeOS Absolute-Best Strategic Implementation Plan (v1)](strategic-implementation-plan-v1.md) — **active roadmap; execute by phase gates**
+- [KnowledgeOS Absolute-Best Strategic Implementation Plan (v1)](strategic-implementation-plan-v1.md) — roadmap history
 - [Guaranteed Autopilot](guaranteed-autopilot.md)
 - [Invisible Twin Autopilot](invisible-twin-autopilot.md)
 - [KnowledgeOS MCP Memory Server](knowledgeos-mcp-memory-server.md) — **P3 shipped**

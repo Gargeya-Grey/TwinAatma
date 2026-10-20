@@ -11,7 +11,7 @@ timestamp: 2026-06-19T00:00:00Z
 ---
 # Example Synthesis Note
 
-This is a template and example showing how a synthesis or weekly review note should look. 
+This is a template and example showing how a synthesis or weekly review note should look.
 
 ## Key Learnings
 - **Finding 1**: Synthesize what was learned or discovered this week.
@@ -22,7 +22,7 @@ This is a template and example showing how a synthesis or weekly review note sho
 - **Project B**: Needs a decision note regarding database architecture.
 
 ## Decisions Logged
-- [Example Decision](../../Decisions/example-decision.md)
+- [Decisions index](../../Decisions/_Index.md)
 
 ## Next Steps
 - Action item 1

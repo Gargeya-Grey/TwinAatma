@@ -27,12 +27,12 @@ Capture → Clarify → Connect → Decide → Execute → Record Outcome → Re
 |---|---|---|
 | Capture | Get the thought out | `Inbox/` + `memory_capture` |
 | Clarify | Typed note + metadata | Templates |
-| Connect | Links to MOCs/projects/decisions | validate_schema |
+| Connect | Links to MOCs/projects/decisions | `twinaatma validate` |
 | Decide | First-class decision note | `Decisions/` + outcome fields |
 | Execute | Do the work (Notion/tasks/world) | optional Notion bridge |
 | Record Outcome | expected → actual → lesson | Outcomes Dashboard |
-| Review | Weekly synthesis + alignment | `draft_weekly_synthesis.py` |
-| Update Self | Proposal → accept/reject | `propose_self_update.py` / MCP |
+| Review | Weekly synthesis + alignment | agent summary + `memory_timeline` |
+| Update Self | Proposal → *you* approve in a terminal | `memory_propose_self_update` / `twinaatma self approve` |
 
 This loop is what turns a vault into a **digital representation of you over time**.
 
@@ -174,59 +174,35 @@ MOC first → relevant note → backlinks/graph/search for discovery
 
 So the graph view is useful for exploration, while MOCs remain the primary navigation spine.
 
-### 5. Automation Scripts
-Scripts keep the vault operational:
+### 5. Autopilot (no scripts to run)
+A data-only vault has no `scripts/` folder. The agent toolkit does everything:
 
-| Script | Use |
+| Action | Command |
 |---|---|
-| `onboarding.py` | Interactive CLI wizard to initialize/configure your Ego Node (Self.md) |
-| `doctor.py` | Run diagnostic environment and vault health checks |
-| `rebuild_index.py` | Rebuilds the SQLite search/graph index |
-| `search.py` | Searches titles, tags, projects, and linked notes |
-| `weekly_data.py` | Produces weekly metrics |
-| `daily_capture_report.py` | Checks Inbox items |
-| `refinement_report.py` | Finds notes needing cleanup/refinement |
-| `experiment_dashboard.py` | Generates experiment dashboard |
-| `update_mocs.py` | Refreshes generated dashboards |
-| `draft_weekly_synthesis.py` | Drafts a weekly synthesis |
-| `validate_schema.py` | Checks metadata/link health |
-| `refactor_links.py` | Automatically refactor broken paths and migrate wikilinks |
-| `export_bundle.py` | Exports portable markdown bundles |
-| `publish_to_notion.py` | Publishes refined notes to Notion after dry-run |
+| Refresh the search index | automatic on the first tool call of a chat |
+| Diagnostics | `twinaatma doctor` |
+| Metadata/link health | `twinaatma validate` |
+| Full autopilot tick | `twinaatma breathe` |
+| Stable entity ids | `twinaatma ids assign --write` |
+| MCP host config | `twinaatma setup-host --host cursor --write` |
+
+Repository maintainers still have `scripts/` for reports and Notion export; those are
+development tools, not part of operating a vault.
 
 ## How to Use It Day to Day
 
 ### Daily Use — 5 to 15 minutes
-1. Put raw thoughts into [Inbox](../Inbox/_Index.md).
-2. Run or ask Hermes to run:
-   ```bash
-   python scripts/daily_capture_report.py
-   ```
-3. Convert important raw items into typed notes.
+1. Put raw thoughts into [Inbox](../Inbox/_Index.md), or just tell the agent.
+2. Let the agent capture and file what matters; it calls `memory_capture` for you.
+3. Convert important raw items into typed notes (ask the agent to do it).
 4. Link each note to a MOC, project, decision, concept, or experiment.
-5. Rebuild the index:
-   ```bash
-   python scripts/rebuild_index.py
-   ```
+5. The index refreshes itself before the next search.
 
 ### Weekly Use — 30 to 60 minutes
-1. Refresh dashboards:
-   ```bash
-   python scripts/rebuild_index.py && python scripts/update_mocs.py
-   ```
-2. Draft synthesis:
-   ```bash
-   python scripts/draft_weekly_synthesis.py
-   ```
-3. Review refinement candidates:
-   ```bash
-   python scripts/refinement_report.py
-   ```
-4. Validate schema:
-   ```bash
-   python scripts/validate_schema.py
-   ```
-5. Update active projects/experiments.
+1. Ask the agent for a summary of the week; it loads the timeline and drift signals.
+2. Review the one drift proposal it drafted, and answer yes or no.
+3. Close outcomes on open decisions.
+4. Update active projects/experiments.
 
 ### Monthly Use — 60 to 120 minutes
 1. Use [Monthly Review Template](../Templates/t-monthly-review.md).
@@ -276,7 +252,8 @@ It should have:
 - stable wording
 - next actions, implications, or decisions where relevant
 
-Always dry-run first:
+Always dry-run first. This bridge lives in the repository's `scripts/` (a maintainer
+tool, not part of a data-only vault):
 
 ```bash
 python scripts/publish_to_notion.py --dry-run path/to/note.md

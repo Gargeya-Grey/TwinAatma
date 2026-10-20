@@ -12,6 +12,7 @@ if str(VAULT) not in sys.path:
 
 from knowledgeos.evolution import decisions_with_lessons, pending_outcome_reviews  # noqa: E402
 from knowledgeos.memory import MemoryAPI  # noqa: E402
+from knowledgeos.data_ops import write_generated  # noqa: E402
 
 OUT = VAULT / "MOCs" / "_MOC_Outcomes.md"
 
@@ -80,7 +81,7 @@ def main() -> int:
         "Capture → Clarify → Connect → Decide → Execute → **Record Outcome** → Review → **Update Self**",
         "",
     ]
-    OUT.write_text("\n".join(lines), encoding="utf-8")
+    write_generated(VAULT, OUT, "\n".join(lines))
     print(f"Wrote {OUT}")
     return 0
 

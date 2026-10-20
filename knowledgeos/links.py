@@ -1,7 +1,7 @@
 """Link extraction helpers."""
 from __future__ import annotations
 
-import os
+import posixpath
 import re
 import urllib.parse
 from pathlib import Path
@@ -10,45 +10,83 @@ WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)")
 
 
+class LinkTarget(str):
+    """A raw link that retains Markdown's relative-path semantics."""
+
+    def __new__(cls, value: str, *, markdown: bool = False):
+        target = super().__new__(cls, value)
+        target.markdown = markdown
+        return target
+
+
+class NoteLookup(dict[str, str]):
+    def __init__(self):
+        super().__init__()
+        self.basenames: dict[str, list[str]] = {}
+
+
+def _without_fences(text: str) -> str:
+    lines: list[str] = []
+    fence: str | None = None
+    for line in text.splitlines(keepends=True):
+        match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+        if fence is None and match:
+            fence = match[1]
+        elif fence is not None:
+            if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                fence = None
+        else:
+            lines.append(line)
+    return "".join(lines)
+
+
 def extract_raw_links(text: str) -> list[str]:
+    text = _without_fences(text)
     links: list[str] = []
     for raw in WIKILINK_RE.findall(text):
-        links.append(raw)
+        if not raw.strip().startswith("#"):
+            links.append(LinkTarget(raw))
     for raw in MARKDOWN_LINK_RE.findall(text):
-        if not raw.startswith(("http://", "https://", "mailto:", "ftp:", "#", "obsidian:")):
-            links.append(urllib.parse.unquote(raw))
+        if not re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", raw) and not raw.startswith("#"):
+            links.append(LinkTarget(urllib.parse.unquote(raw.strip().strip("<>")), markdown=True))
     return links
 
 
 def build_note_lookup(md_files: list[Path], vault_dir: Path) -> dict[str, str]:
-    lookup: dict[str, str] = {}
-    for path in md_files:
+    lookup = NoteLookup()
+    for path in sorted(md_files):
         rel = path.relative_to(vault_dir).as_posix()
-        stem = path.stem
         lookup[rel.lower()] = rel
         lookup[rel[:-3].lower()] = rel
-        lookup[stem.lower()] = rel
+        for name in (path.stem.lower(), path.name.lower()):
+            lookup.basenames.setdefault(name, []).append(rel)
     return lookup
 
 
-def normalize_link(raw: str, source_rel: str, lookup: dict[str, str]) -> str:
+def link_candidates(raw: str, source_rel: str, lookup: dict[str, str]) -> list[str]:
     target = urllib.parse.unquote(raw.split("|", 1)[0].split("#", 1)[0].strip())
     if not target:
-        return raw.strip()
+        return []
     target = target.replace("\\", "/")
-    source_dir = str(Path(source_rel).parent).replace("\\", "/")
-    candidates = []
-    if target.endswith(".md"):
-        candidates.append(target)
-    else:
-        candidates.extend([target, target + ".md"])
-    if source_dir and source_dir != ".":
-        candidates.extend([f"{source_dir}/{c}" for c in list(candidates)])
-    for c in candidates:
-        norm = os.path.normpath(c).replace("\\", "/")
-        hit = lookup.get(norm.lower()) or lookup.get(
-            norm[:-3].lower() if norm.endswith(".md") else norm.lower()
-        )
+    markdown = getattr(raw, "markdown", False)
+    if not markdown and "/" not in target and isinstance(lookup, NoteLookup):
+        return sorted(lookup.basenames.get(target.lower(), []))
+    root_target = target.lstrip("/")
+    relative = posixpath.join(posixpath.dirname(source_rel), target)
+    candidates = [relative, root_target] if markdown and not target.startswith("/") else [root_target]
+    for candidate in candidates:
+        norm = posixpath.normpath(candidate).lower()
+        hit = lookup.get(norm) or lookup.get(norm + ".md")
         if hit:
-            return hit
+            return [hit]
+    return []
+
+
+def normalize_link(raw: str, source_rel: str, lookup: dict[str, str]) -> str:
+    matches = link_candidates(raw, source_rel, lookup)
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        return ""
+    target = urllib.parse.unquote(raw.split("|", 1)[0].split("#", 1)[0].strip())
     return target

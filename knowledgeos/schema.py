@@ -38,6 +38,7 @@ NOTE_TYPES_V03 = NOTE_TYPES_V02 | {
 }
 
 STATUS_VALUES = {"draft", "active", "refined", "archived", "completed"}
+SELF_PROPOSAL_STATUS_VALUES = STATUS_VALUES | {"accepted", "rejected", "superseded"}
 
 OUTCOME_STATUS_VALUES = {"pending", "confirmed", "invalidated", "superseded"}
 

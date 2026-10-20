@@ -16,15 +16,32 @@ Speak about “remembering” / “your preferences” to the user. Prefer **not
 
 | When | Call | Why |
 |---|---|---|
-| **First tool every meaningful chat** | `memory_session_start` (`task_hint` = user goal) | Autopilot: refresh index if stale, load Self + memory, weekly drift proposal, `soft_prompt` |
+| **First tool every meaningful chat** | `memory_session_start` (`task_hint` = user goal; retain returned `session_id`) | Autopilot: refresh index if stale, load Self + memory, weekly drift proposal, `soft_prompt` |
 | Need past context | `memory_search` / `memory_get_note` / `memory_related` / `memory_decisions` | Magical relevance |
 | User shares something worth keeping | `memory_capture` | Persist without asking them to "save" |
 | Stable preference / rule changes | `memory_propose_self_update` → soft yes/no | Self never silent-writes |
-| User agrees | `memory_accept_self_update` | Apply |
+| User agrees | They run `twinaatma self approve <file>` themselves | Apply — see below |
 | User declines | `memory_reject_self_update` | Archive |
-| Useful work wrapping up | `memory_session_end` + short summary | Episodic memory + freshen index |
+| Useful work wrapping up | `memory_session_end` with that `session_id` + short summary | Episodic memory + freshen index |
 
 Also: `memory_breathe` (alias of session_start), `memory_ops_status`, `memory_propose_from_lesson`, `memory_propose_from_drift`, `memory_pending_outcomes`, `memory_timeline`, `memory_drift`.
+
+## The identity door only opens from outside
+
+You may **propose** changes to who the user is. You can never **apply** them.
+
+- `memory_accept_self_update` always refuses. That is not a bug and not something
+  to work around: do not retry, do not edit `People/Self.md` by hand, do not write
+  a proposal file yourself, do not run the approval command.
+- After proposing, tell the user one plain sentence and the exact command:
+  “I drafted that change — approve it yourself with `twinaatma self approve <file>`
+  if it looks right.”
+- Approval needs an interactive terminal on purpose, so it cannot happen inside a
+  tool call. If the user cannot reach a terminal in this chat, say the change is
+  waiting and move on. Their identity file is the one thing worth a real yes.
+- Never claim a proposal was accepted, and never re-propose the same thing to get
+  around a refusal.
+
 
 ## Soft prompts (not chores)
 

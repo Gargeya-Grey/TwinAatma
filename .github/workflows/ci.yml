@@ -1,0 +1,116 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: source suite (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit + integration suite
+        run: python -B -m unittest discover -s tests -v
+        working-directory: .
+      - name: Scorecard (deterministic, no reviewer variance)
+        run: python tests/score.py --json > "$RUNNER_TEMP/scorecard.json" && python tests/score.py
+        shell: bash
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: scorecard-${{ matrix.os }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/scorecard.json
+          retention-days: 14
+      - name: Vault init smoke (from the package, no scripts/)
+        shell: bash
+        run: |
+          python -m knowledgeos init "$RUNNER_TEMP/vault" --name CI --non-interactive > /dev/null
+          test -f "$RUNNER_TEMP/vault/People/Self.md"
+          python -m knowledgeos validate --vault "$RUNNER_TEMP/vault"
+          python -m knowledgeos doctor --vault "$RUNNER_TEMP/vault"
+      - name: Assert the checks left the working tree clean
+        shell: bash
+        run: |
+          if [ -n "$(git status --porcelain -- ':!*.pyc' ':!__pycache__')" ]; then
+            echo "Checks mutated the repository:"
+            git status --porcelain
+            exit 1
+          fi
+
+  mutation-check:
+    name: known defects really fail their scenarios
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python tests/mutation_check.py
+
+  docs-contract:
+    name: docs match code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: No documented command may be missing from the CLI
+        run: python tests/test_docs.py
+
+  wheel:
+    name: installed wheel (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install --upgrade pip build
+      - name: Build the wheel
+        run: python -m build --wheel --outdir dist-wheel
+      - name: Verify this wheel in a neutral, isolated install
+        shell: bash
+        run: python tests/package_smoke.py --wheel dist-wheel/*.whl --source .
+
+  binary:
+    name: build binary (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip pyinstaller
+      - run: pyinstaller pyinstaller.spec --noconfirm
+      - name: Verify this binary in a neutral vault
+        shell: bash
+        run: |
+          BIN=dist/twinaatma/twinaatma
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then BIN="$BIN.exe"; fi
+          python tests/package_smoke.py --binary "$BIN"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: twinaatma-${{ matrix.os }}
+          path: dist/twinaatma/
+          retention-days: 14

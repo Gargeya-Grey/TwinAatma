@@ -16,6 +16,8 @@ import sys
 from pathlib import Path
 
 VAULT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(VAULT_DIR))
+from knowledgeos.remembering import current_database as connect_database, RememberingPolicy
 DB = VAULT_DIR / "knowledge_index.db"
 
 
@@ -24,7 +26,7 @@ def main() -> int:
         print(f"Index database not found at {DB}. Please run python scripts/rebuild_index.py first.")
         return 1
 
-    conn = sqlite3.connect(DB, timeout=30.0)
+    conn = connect_database(DB, timeout=30.0)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
     today = datetime.date.today().isoformat()
@@ -65,7 +67,7 @@ def main() -> int:
         idx_path = row["path"] if isinstance(row, sqlite3.Row) else row[0]
         full_path = VAULT_DIR / idx_path
         if full_path.exists():
-            content = full_path.read_text(encoding="utf-8", errors="replace")
+            content = RememberingPolicy(VAULT_DIR).read(full_path, historical=False) or ""
             in_decisions_to_make = False
             for line in content.splitlines():
                 if "Decisions to Make" in line or "Pending Decisions" in line:
@@ -85,7 +87,7 @@ def main() -> int:
         title, path = row["title"], row["path"]
         full_path = VAULT_DIR / path
         if full_path.exists():
-            content = full_path.read_text(encoding="utf-8", errors="replace")
+            content = RememberingPolicy(VAULT_DIR).read(full_path, historical=False) or ""
             if "Next Actions" not in content and "next steps" not in content.lower():
                 print(f"[WARNING] Stale Project: '{title}' ({path}) has no 'Next Actions' section.")
                 stale_count += 1

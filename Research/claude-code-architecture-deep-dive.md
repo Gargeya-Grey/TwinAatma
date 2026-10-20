@@ -103,4 +103,4 @@ Each answers a different integration problem. The ordering is deliberate — pay
 - What does subagent delegation look like for tutoring vs coding?
 
 ## Related Concepts
-- [Agent Harness Architecture](Agent Harness Architecture.md)
+- [Agent Harness Architecture](../Concepts/agent-harness-architecture.md)

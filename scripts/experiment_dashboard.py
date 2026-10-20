@@ -1,12 +1,16 @@
 #!/usr/bin/env python
 """Generate an experiments dashboard from indexed experiment notes."""
 from pathlib import Path
-import sqlite3, re, datetime
+import sqlite3, datetime, sys
 VAULT=Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(VAULT))
+from knowledgeos.remembering import current_database as connect_database
+from knowledgeos.data_ops import write_generated
 DB=VAULT/'knowledge_index.db'
 OUT=VAULT/'MOCs'/'_MOC_Experiments.md'
-conn=sqlite3.connect(DB, timeout=30.0); conn.row_factory=sqlite3.Row
+conn=connect_database(DB, timeout=30.0); conn.row_factory=sqlite3.Row
 rows=conn.execute("select title,path,status,tags,project,updated from notes where type='experiment' and path not like 'Templates/%' order by status, updated desc").fetchall()
+conn.close()
 lines=[
     '---',
     'type: moc',
@@ -35,5 +39,5 @@ for status in ['active','draft','completed','archived']:
         )
     lines.append('')
 lines += ['## Review Prompts','','- Which active experiments have no results yet?','- Which experiments should become decisions?','- Which assumptions have no experiment?','']
-OUT.write_text('\n'.join(lines),encoding='utf-8')
+write_generated(VAULT, OUT, '\n'.join(lines))
 print(f'Wrote {OUT}')

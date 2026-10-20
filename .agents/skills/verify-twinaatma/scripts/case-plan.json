@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "scope": "longitudinal",
+  "allowed_evidence": "Synthetic longitudinal public CLI/MCP records only",
+  "excluded_claims": ["representative week", "real-host usefulness", "independent human consent", "owner approval"],
+  "before": "Choose annual subscriptions before trying the service",
+  "after": "Prefer short cancellable trials before annual commitments",
+  "contradiction": "Prefer annual commitments instead of short trials",
+  "narratives": {
+    "mail": "The mail trial revealed missing exports before its renewal deadline.",
+    "calendar": "The calendar pilot failed offline during two scheduled meetings.",
+    "storage": "The storage pilot could not restore the archived project on another device."
+  },
+  "activity_cases": ["activity_initial", "activity_reformatted", "activity_retimestamped"],
+  "negative_cases": ["single_completed", "pending_partner", "missing_explicit_pair", "duplicate_id", "copied_narrative", "unchanged_belief", "mismatched_lesson", "contradictory_sources", "superseded_source"],
+  "recurrence_cases": ["recorded_pair", "uncertain_attributed", "draft_idempotent", "public_rejection", "unchanged_rejected", "reformatted_rejected", "retimestamped_rejected", "renamed_rejected", "rekeyed_rejected", "copied_rejected", "history_unavailable", "history_inconsistent", "new_named_source", "new_draft_idempotent"],
+  "decision_ids": {"mail": "kos:decision:long739-mail", "calendar": "kos:decision:long739-calendar", "storage": "kos:decision:long739-storage"},
+  "policy": "A new completed source must have a new stable ID, new path and distinct concrete narrative; old-source edits and copied narratives do not reopen a rejected claim.",
+  "identity": "Every proposal remains an unapproved uncertain draft. Never call approval or mutate Self."
+}

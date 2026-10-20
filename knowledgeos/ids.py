@@ -1,11 +1,12 @@
 """Stable KnowledgeOS entity ID helpers (`kos:<type>:<slug>`)."""
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Iterable
 
-from knowledgeos.parser import parse_frontmatter, split_frontmatter
+from knowledgeos.parser import FRONTMATTER_RE, parse_frontmatter
 from knowledgeos.schema import ID_PATTERN, NOTE_TYPES_V03
 
 ID_RE = re.compile(ID_PATTERN)
@@ -32,13 +33,8 @@ def is_valid_id(value: str) -> bool:
 
 
 def _inject_id_into_frontmatter(text: str, entity_id: str) -> str:
-    """Insert or replace `id:` in frontmatter; bump schema toward v0.3 if missing/old."""
-    fm, body = split_frontmatter(text)
-    if not fm and not text.startswith("---"):
-        # No frontmatter — wrap minimally is too invasive; skip
-        raise ValueError("note has no frontmatter")
-
-    m = re.match(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", text, re.S)
+    """Edit top-level metadata without reconstructing the delimiter or body."""
+    m = FRONTMATTER_RE.match(text)
     if not m:
         raise ValueError("could not locate frontmatter block")
 
@@ -48,19 +44,14 @@ def _inject_id_into_frontmatter(text: str, entity_id: str) -> str:
     saw_id = False
     saw_schema = False
     for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("id:"):
+        if re.match(r"^id\s*:", line, re.I):
             out_lines.append(f"id: {entity_id}")
             saw_id = True
             continue
-        if stripped.startswith("schema:"):
-            # Keep existing schema unless empty
-            val = stripped.split(":", 1)[1].strip()
-            if not val or val == "knowledgeos-v0.2":
-                # Additive IDs are valid on v0.2 notes; leave schema unless user opts in.
-                out_lines.append(line)
-            else:
-                out_lines.append(line)
+        if re.match(r"^schema\s*:", line, re.I):
+            # IDs are additive on v0.2; retain declared versions.
+            val = line.split(":", 1)[1].strip()
+            out_lines.append(line if val else "schema: knowledgeos-v0.2")
             saw_schema = True
             continue
         out_lines.append(line)
@@ -71,7 +62,7 @@ def _inject_id_into_frontmatter(text: str, entity_id: str) -> str:
         new_lines: list[str] = []
         for line in out_lines:
             new_lines.append(line)
-            if not inserted and line.strip().startswith("type:"):
+            if not inserted and re.match(r"^type\s*:", line, re.I):
                 new_lines.append(f"id: {entity_id}")
                 inserted = True
         if not inserted:
@@ -82,14 +73,14 @@ def _inject_id_into_frontmatter(text: str, entity_id: str) -> str:
         out_lines.append("schema: knowledgeos-v0.2")
 
     new_yaml = "\n".join(out_lines)
-    return f"---\n{new_yaml}\n---\n{body}" if body is not None else f"---\n{new_yaml}\n---\n"
+    return text[:m.start(1)] + new_yaml + text[m.end(1):]
 
 
 def collect_existing_ids(paths: Iterable[Path]) -> dict[str, str]:
     """Map entity id → relative path string for collision detection."""
     found: dict[str, str] = {}
     for path in paths:
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_bytes().decode("utf-8")
         fm = parse_frontmatter(text)
         eid = fm.get("id")
         if eid:
@@ -103,22 +94,49 @@ def assign_ids_for_vault(
     write: bool = False,
     only_missing: bool = True,
 ) -> list[dict]:
-    """Assign kos IDs to notes. Returns change records. Dry-run unless write=True."""
-    skip = {".git", "node_modules", "__pycache__", "Templates", "Archive"}
+    """Assign kos IDs to notes. Returns change records. Dry-run unless write=True.
+
+    ``People/Self.md`` and proposals are never touched: identity changes go through
+    the Self gate only, so no other command may rewrite that file.
+    """
+    vault_root = Path(os.path.abspath(vault_root))
+    skip = {
+        ".git",
+        ".knowledgeos",
+        ".trash",
+        "node_modules",
+        "__pycache__",
+        "Templates",
+        "Archive",
+        "People",
+    }
+    # `rglob` follows directory junctions, so a junction inside the vault pointing
+    # elsewhere made `ids assign --write` rewrite files *outside* the vault — the one
+    # promise the tool surface makes. `iter_markdown` already walks without following
+    # links and confirms every file resolves inside the vault; use it, then keep the
+    # older filters on top.
+    from knowledgeos.indexer import iter_markdown
+
+    all_files = iter_markdown(vault_root)
+    skipped = {name.casefold() for name in skip}
     md_files = [
         p
-        for p in vault_root.rglob("*.md")
-        if not any(part in skip for part in p.parts)
+        for p in all_files
+        if not any(part.casefold() in skipped for part in p.relative_to(vault_root).parts)
         and not (p.name.lower() == "readme.md" and p.parent == vault_root)
     ]
 
-    existing = collect_existing_ids(md_files)
+    # Protected notes reserve their IDs even though they are never write targets.
+    existing = collect_existing_ids(all_files)
     used = set(existing.keys())
     changes: list[dict] = []
 
     for path in sorted(md_files):
+        if write:
+            from knowledgeos.data_ops import plain_vault_path
+            plain_vault_path(vault_root, path)
         rel = path.relative_to(vault_root).as_posix()
-        text = path.read_text(encoding="utf-8", errors="replace")
+        text = path.read_bytes().decode("utf-8")
         fm = parse_frontmatter(text)
         if not fm:
             continue
@@ -149,7 +167,10 @@ def assign_ids_for_vault(
         }
         if write:
             new_text = _inject_id_into_frontmatter(text, candidate)
-            path.write_text(new_text, encoding="utf-8")
+            from knowledgeos.textio import write_preserving_endings
+
+            plain_vault_path(vault_root, path)
+            write_preserving_endings(path, new_text)
             record["written"] = True
         changes.append(record)
 

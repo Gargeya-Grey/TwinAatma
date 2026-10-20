@@ -12,10 +12,13 @@ from knowledgeos.evolution import list_open_proposals, pending_outcome_reviews
 from knowledgeos.memory import MemoryAPI
 from knowledgeos.parser import parse_frontmatter
 from knowledgeos.self_model import load_self
+from knowledgeos.data_ops import write_generated
+from knowledgeos.indexer import iter_markdown
+from knowledgeos.remembering import RememberingPolicy
 
 
 def _conn(api: MemoryAPI) -> sqlite3.Connection:
-    return api._conn()
+    return RememberingPolicy(api.vault).current_connection()
 
 
 def stale_active_projects(api: MemoryAPI, days: int = 21) -> list[dict[str, Any]]:
@@ -101,11 +104,14 @@ def find_tensions(api: MemoryAPI) -> list[dict[str, Any]]:
     vault = api.vault
 
     # 1) Frontmatter supersedes/invalidates pointing at existing notes
-    for path in vault.rglob("*.md"):
+    policy = RememberingPolicy(vault)
+    for path in iter_markdown(vault):
         if any(p in path.parts for p in (".git", "Templates", "node_modules")):
             continue
         try:
-            text = path.read_text(encoding="utf-8", errors="replace")
+            text = policy.read(path, historical=False)
+            if text is None:
+                continue
         except OSError:
             continue
         fm = parse_frontmatter(text)
@@ -227,7 +233,7 @@ def write_intelligence_views(api: MemoryAPI) -> dict[str, str]:
             *body_lines,
             "",
         ]
-        path.write_text("\n".join(lines), encoding="utf-8")
+        write_generated(api.vault, path, "\n".join(lines))
         out_paths[title] = api._rel(path)
 
     # Stale projects
@@ -429,8 +435,7 @@ def weekly_intelligence_report(api: MemoryAPI, days: int = 7) -> Path:
         "- Close overdue decision outcomes",
         "",
     ]
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines), encoding="utf-8")
+    write_generated(api.vault, out, "\n".join(lines))
     return out
 
 
@@ -457,9 +462,9 @@ def learning_trajectory_report(api: MemoryAPI) -> Path:
         "## Self Drift Log",
         "",
     ]
-    if api.self_path.exists():
-        model = load_self(api.self_path)
-        drift = model.sections.get("drift_log") or "_No drift log section._"
+    identity = api.self_get()
+    if not identity.get("error"):
+        drift = identity["sections"].get("drift_log") or "_No drift log section._"
         lines.append(drift)
     else:
         lines.append("_Self.md missing._")
@@ -493,6 +498,5 @@ def learning_trajectory_report(api: MemoryAPI) -> Path:
         "Promote durable lessons into Self heuristics via proposals.",
         "",
     ]
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines), encoding="utf-8")
+    write_generated(api.vault, out, "\n".join(lines))
     return out

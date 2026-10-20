@@ -1,13 +1,17 @@
 #!/usr/bin/env python
 """Inspect Inbox notes and suggest processing actions."""
 from pathlib import Path
-import re, json
+import re, json, sys
 VAULT=Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(VAULT))
+from knowledgeos.remembering import RememberingPolicy
+policy=RememberingPolicy(VAULT)
 inbox=VAULT/'Inbox'
 items=[]
 for p in inbox.rglob('*.md'):
     if p.name=='_Index.md': continue
-    text=p.read_text(encoding='utf-8',errors='replace')
+    text=policy.read(p, historical=False)
+    if text is None: continue
     links=re.findall(r'\[\[[^\]]+\]\]',text) or re.findall(r'\[[^\]]+\]\(((?:[^()]+|\([^()]*\))+)\)',text)
     kind='research'
     low=text.lower()

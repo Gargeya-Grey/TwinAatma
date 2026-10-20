@@ -1,0 +1,10 @@
+# Everything a wheel needs to build a working vault, plus docs and tests.
+include README.md LICENSE CONTRIBUTING.md AGENTS.md pyproject.toml setup.py
+include pyinstaller.spec
+recursive-include Templates *
+recursive-include .cursor *
+recursive-include MOCs *.md
+recursive-include Decisions *.md
+recursive-include scripts *.py
+recursive-include tests *.py
+recursive-include .github *.yml

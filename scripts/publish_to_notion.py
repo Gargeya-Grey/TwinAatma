@@ -18,8 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
-import sqlite3
 import sys
 import urllib.error
 import urllib.parse
@@ -32,6 +30,8 @@ if _ROOT not in sys.path:
 
 import _notion_env
 from knowledgeos.parser import split_frontmatter
+from knowledgeos.remembering import RememberingPolicy, PolicyError
+from pathlib import Path
 
 VAULT_DIR = _ROOT
 
@@ -55,19 +55,81 @@ def notion_api(method, path, data=None, key=None):
             "Content-Type": "application/json",
         },
     )
-    resp = urllib.request.urlopen(req)
-    return json.loads(resp.read())
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        return json.loads(resp.read())
 
 
 def parse_frontmatter(content):
     """Compatibility wrapper — returns (fm, body) like the old local parser."""
-    return split_frontmatter(content)
+    # Policy reads preserve source bytes. The transport has always used logical
+    # newlines, independently of the file's platform or mixed line endings.
+    return split_frontmatter(content.replace("\r\n", "\n").replace("\r", "\n"))
+
+
+def rich_text(text):
+    chunks = [{"text": {"content": text[i:i + 2000]}} for i in range(0, len(text), 2000)]
+    if len(chunks) > 100:
+        raise ValueError("Text exceeds a single supported Notion request; refusing to truncate")
+    return chunks
+
+
+def _plain_text(chunks):
+    return "".join(chunk.get("text", {}).get("content", chunk.get("plain_text", "")) for chunk in chunks)
+
+
+def _property_value(prop):
+    for kind in ("title", "rich_text"):
+        if kind in prop:
+            return _plain_text(prop[kind])
+    if "multi_select" in prop:
+        return sorted(option["name"] for option in prop["multi_select"])
+    if "select" in prop:
+        return (prop["select"] or {}).get("name")
+    return prop.get("url")
+
+
+def create_or_match_page(payload, source_link, link_prop, ds_id, key):
+    """Converge retries; changed or ambiguous remote pages require manual reconciliation."""
+    found = notion_api("POST", f"data_sources/{ds_id}/query", {
+        "filter": {"property": link_prop, "url": {"equals": source_link}}, "page_size": 2,
+    }, key=key)
+    if "results" not in found:
+        raise ValueError("Source identity lookup returned no results field")
+    matches = found["results"]
+    if found.get("has_more") or len(matches) > 1:
+        raise ValueError("Multiple remote pages share this source; refusing to create or overwrite")
+    if not matches:
+        result = notion_api("POST", "pages", payload, key=key)
+        if not result.get("id"):
+            raise ValueError("Create response omitted page identity; retry will query before creating")
+        return result
+    page = matches[0]
+    properties_match = all(
+        _property_value(page.get("properties", {}).get(name, {})) == _property_value(prop)
+        for name, prop in payload["properties"].items()
+    )
+    children = notion_api("GET", f"blocks/{page['id']}/children?page_size=100", key=key)
+    blocks = children.get("results", [])
+    body_matches = (
+        "results" in children and not children.get("has_more")
+        and all(block.get("type") == "paragraph" and not block.get("has_children") for block in blocks)
+        and "".join(_plain_text(block["paragraph"]["rich_text"]) for block in blocks)
+        == "".join(_plain_text(block["paragraph"]["rich_text"]) for block in payload["children"])
+    )
+    if not properties_match or not body_matches:
+        raise ValueError("Existing page differs from source; refusing to overwrite or create a duplicate")
+    return page
 
 
 def publish_note(filepath, dry_run=False, key=None, ds_id=None, notion_cfg=None):
     notion_cfg = notion_cfg or {}
-    with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+    try:
+        content = RememberingPolicy(VAULT_DIR).read(Path(filepath).absolute(), historical=False)
+        if content is None:
+            raise PolicyError("Source note is unavailable or excluded by the remembering policy.")
+    except (OSError, UnicodeError, PolicyError):
+        print("FAILED: Source note is unavailable or excluded by the remembering policy.")
+        return False
 
     fm, body = parse_frontmatter(content)
 
@@ -132,7 +194,7 @@ def publish_note(filepath, dry_run=False, key=None, ds_id=None, notion_cfg=None)
     if fm.get("priority") in {"now", "🔥 Now"}:
         notion_priority = "Now"
 
-    next_action = f"Review and process this note: {title}"[:2000]
+    next_action = f"Review and process this note: {title}"
     note_type = fm.get("type", "concept")
     posix_rel_path = rel_path.replace("\\", "/")
     vault_name = os.path.basename(VAULT_DIR)
@@ -140,7 +202,7 @@ def publish_note(filepath, dry_run=False, key=None, ds_id=None, notion_cfg=None)
         f"obsidian://open?vault={urllib.parse.quote(vault_name)}"
         f"&file={urllib.parse.quote(posix_rel_path, safe='/')}"
     )
-    body_summary = body.strip()[:2000] if body else ""
+    body_summary = body or ""
 
     props = notion_cfg.get("property_names") or {}
     title_prop = props.get("title", "Idea")
@@ -167,39 +229,29 @@ def publish_note(filepath, dry_run=False, key=None, ds_id=None, notion_cfg=None)
         "body": body_summary,
     }
 
-    if dry_run:
-        print(f"DRY RUN: Would publish {rel_path}")
-        print(json.dumps(note_data, indent=2))
-        return True
-
     try:
-        result = notion_api(
-            "POST",
-            "pages",
-            {
-                "parent": {"type": "data_source_id", "data_source_id": ds_id},
-                "properties": {
-                    title_prop: {"title": [{"text": {"content": title[:2000]}}]},
-                    category_prop: {"multi_select": [{"name": c} for c in categories]},
-                    status_prop: {"select": {"name": f"{status_prefix}{notion_status}"}},
-                    priority_prop: {"select": {"name": f"{priority_prefix}{notion_priority}"}},
-                    context_prop: {"select": {"name": default_context}},
-                    next_action_prop: {"rich_text": [{"text": {"content": next_action}}]},
-                    link_prop: {"url": obsidian_link},
-                    type_prop: {"select": {"name": note_type}},
-                },
-                "children": [
-                    {
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {"rich_text": [{"text": {"content": body_summary}}]},
-                    }
-                ]
-                if body_summary
-                else [],
+        payload = {
+            "parent": {"type": "data_source_id", "data_source_id": ds_id},
+            "properties": {
+                title_prop: {"title": rich_text(title)},
+                category_prop: {"multi_select": [{"name": c} for c in categories]},
+                status_prop: {"select": {"name": f"{status_prefix}{notion_status}"}},
+                priority_prop: {"select": {"name": f"{priority_prefix}{notion_priority}"}},
+                context_prop: {"select": {"name": default_context}},
+                next_action_prop: {"rich_text": rich_text(next_action)},
+                link_prop: {"url": obsidian_link},
+                type_prop: {"select": {"name": note_type}},
             },
-            key=key,
-        )
+            "children": [
+                {"object": "block", "type": "paragraph", "paragraph": {"rich_text": [chunk]}}
+                for chunk in rich_text(body_summary)
+            ],
+        }
+        if dry_run:
+            print(f"DRY RUN: Would publish {rel_path}")
+            print(json.dumps(note_data, indent=2))
+            return True
+        result = create_or_match_page(payload, obsidian_link, link_prop, ds_id, key)
         page_url = result.get("url", "published")
         print(f"PUBLISHED: {rel_path}")
         print(f"  Notion: {page_url}")
@@ -221,82 +273,45 @@ def publish_note(filepath, dry_run=False, key=None, ds_id=None, notion_cfg=None)
 
 
 def _collect_publish_candidates() -> list[str]:
-    """Find refined notes with publish_to_notion enabled (file scan + index assist)."""
-    db_path = os.path.join(VAULT_DIR, "knowledge_index.db")
-    candidate_paths: list[str] = []
-    if os.path.exists(db_path):
-        try:
-            conn = sqlite3.connect(db_path)
-            rows = conn.execute(
-                "SELECT path FROM notes WHERE status='refined' AND path NOT LIKE 'Templates/%'"
-            ).fetchall()
-            conn.close()
-            candidate_paths = [os.path.join(VAULT_DIR, r[0]) for r in rows]
-        except Exception as e:
-            print(f"Warning: could not query index ({e}); scanning markdown files.")
-
-    if not candidate_paths:
-        for root, _dirs, files in os.walk(VAULT_DIR):
-            if any(part.startswith(".") for part in root.split(os.sep)):
-                continue
-            if os.path.basename(root) in {"scripts", "Assets", "Archive"}:
-                continue
-            for name in files:
-                if name.endswith(".md"):
-                    candidate_paths.append(os.path.join(root, name))
+    """Select current opted-in source notes, independent of a stale index."""
+    from knowledgeos.vault import Vault
 
     selected = []
-    for path in candidate_paths:
-        if not os.path.exists(path):
+    vault = Vault(VAULT_DIR)
+    for path in vault.iter_markdown(skip_archive=True):
+        if "Templates" in path.relative_to(vault.root).parts[:-1]:
             continue
         try:
-            with open(path, encoding="utf-8") as f:
-                content = f.read(4000)
-            fm, _ = parse_frontmatter(content if content.startswith("---") else "---\n---\n" + content)
-            # Re-read full file if needed for accurate frontmatter
-            with open(path, encoding="utf-8") as f:
-                fm, _ = parse_frontmatter(f.read())
+            text = RememberingPolicy(VAULT_DIR).read(path, historical=False)
+            if text is None:
+                continue
+            fm, _ = parse_frontmatter(text)
             if fm.get("status") == "refined" and _truthy(fm.get("publish_to_notion", False)):
-                selected.append(path)
-        except OSError:
+                selected.append(str(path))
+        except (OSError, UnicodeError):
             continue
-    return selected
+    return sorted(selected)
 
 
-if __name__ == "__main__":
-    dry_run = "--dry-run" in sys.argv
-    all_mode = "--all" in sys.argv
-    files = [a for a in sys.argv[1:] if not a.startswith("--")]
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    dry_run = "--dry-run" in argv
+    all_mode = "--all" in argv
+    files = [a for a in argv if not a.startswith("--")]
 
-    # Resolve credentials only when not dry-run, or always for --all discovery messaging
     key = None
     ds_id = None
     notion_cfg = _notion_env.get_notion_config()
     if not dry_run:
         key = _notion_env.get_notion_key()
         ds_id = _notion_env.get_notion_database_id()
-    else:
-        # Dry-run can proceed without credentials; try config for property preview only
-        try:
-            key = os.environ.get("NOTION_API_KEY") or None
-        except Exception:
-            key = None
-        try:
-            ds_id = (
-                os.environ.get("NOTION_DATA_SOURCE_ID")
-                or os.environ.get("NOTION_DATABASE_ID")
-                or notion_cfg.get("data_source_id")
-                or notion_cfg.get("database_id")
-            )
-        except Exception:
-            ds_id = None
 
     if all_mode:
         files = _collect_publish_candidates()
         if not files:
             print("No publishable notes found.")
             print("Mark notes with status=refined and publish_to_notion=true")
-            sys.exit(0)
+            return 0
         print(f"Found {len(files)} note(s) with status=refined and publish_to_notion=true")
 
     if not files:
@@ -304,11 +319,11 @@ if __name__ == "__main__":
         print("Or:    python scripts/publish_to_notion.py [--dry-run] --all")
         print("\nRequires: status=refined, publish_to_notion=true")
         print("Configure Notion via env or knowledgeos.config.json (see example).")
-        sys.exit(1)
+        return 1
 
     if not dry_run and (not key or not ds_id):
         print("Error: Notion credentials missing for live publish.")
-        sys.exit(1)
+        return 1
 
     success = 0
     for f in files:
@@ -319,3 +334,8 @@ if __name__ == "__main__":
     print(f"Done: {success}/{len(files)} published")
     if dry_run:
         print("(dry run — no changes made to Notion)")
+    return 0 if success == len(files) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

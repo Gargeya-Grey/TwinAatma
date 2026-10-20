@@ -1,13 +1,15 @@
 #!/usr/bin/env python
 """Collect weekly KnowledgeOS metrics as JSON without sqlite3 CLI."""
 from __future__ import annotations
-import json, sqlite3
+import json, sqlite3, sys
 from datetime import date, timedelta
 from pathlib import Path
 VAULT_DIR = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(VAULT_DIR))
+from knowledgeos.remembering import current_database as connect_database
 DB = VAULT_DIR / "knowledge_index.db"
 since = (date.today() - timedelta(days=7)).isoformat()
-conn = sqlite3.connect(DB, timeout=30.0)
+conn = connect_database(DB, timeout=30.0)
 conn.row_factory = sqlite3.Row
 cur = conn.cursor()
 def one(sql, params=()): return cur.execute(sql, params).fetchone()[0]

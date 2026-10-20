@@ -51,26 +51,25 @@ def _normalize_heading(text: str) -> str:
 
 
 def _split_sections(body: str) -> dict[str, str]:
-    """Split body on ## headings into canonical Self section keys."""
-    lines = body.splitlines()
-    headings: list[tuple[int, str]] = []
-    for i, line in enumerate(lines):
-        if line.startswith("## "):
-            headings.append((i, _normalize_heading(line)))
-
-    raw: dict[str, str] = {}
-    for idx, (start, heading) in enumerate(headings):
-        end = headings[idx + 1][0] if idx + 1 < len(headings) else len(lines)
-        content = "\n".join(lines[start + 1 : end]).strip()
-        raw[heading] = content
+    """Use the writer's canonical markers, aliases, and ambiguity checks."""
+    from knowledgeos.gate import section_body
 
     sections: dict[str, str] = {}
-    for key, aliases in SECTION_ALIASES.items():
-        for heading, content in raw.items():
-            if any(alias in heading for alias in aliases):
-                sections[key] = content
-                break
+    for key in SECTION_ALIASES:
+        content = section_body(body, key)
+        if content is not None:
+            sections[key] = content.strip()
     return sections
+
+
+def _name_key(text: str) -> str:
+    """Normalised comparison key: letters/digits only, collapsed.
+
+    Identical to ``gate._name_key`` on purpose — two different notions of "same heading"
+    is how a section becomes visible to one path and invisible to the other.
+    """
+    cleaned = "".join(ch for ch in text.lower() if ch.isalnum() or ch in {" ", "-", "_"})
+    return " ".join(cleaned.replace("_", " ").replace("-", " ").split())
 
 
 def load_self(path: Path) -> SelfModel:

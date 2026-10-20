@@ -3,8 +3,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-SKIP_DIR_NAMES = {".git", "node_modules", "__pycache__", ".cursor"}
-
 
 class Vault:
     def __init__(self, root: Path | str | None = None):
@@ -14,13 +12,10 @@ class Vault:
         self.root = Path(root).resolve()
 
     def iter_markdown(self, skip_archive: bool = False):
-        skip = set(SKIP_DIR_NAMES)
-        if skip_archive:
-            skip.add("Archive")
-        for path in self.root.rglob("*.md"):
-            if any(part in skip for part in path.parts):
-                continue
-            if path.name.lower() == "readme.md" and path.parent == self.root:
+        from knowledgeos.indexer import iter_markdown
+
+        for path in iter_markdown(self.root):
+            if skip_archive and "Archive" in path.relative_to(self.root).parts[:-1]:
                 continue
             yield path
 

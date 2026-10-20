@@ -47,7 +47,7 @@ The model reasons. The harness does everything else.
 | Engineering Focus | Harness quality | Routing logic | Planning framework |
 
 ## Related Concepts
-- [Claude Code Architecture Deep Dive](Claude Code Architecture Deep Dive.md) — the research this concept is derived from
+- [Claude Code Architecture Deep Dive](../Research/claude-code-architecture-deep-dive.md) — the research this concept is derived from
 - Permission Systems
 - Context Compaction
 - Tool-Use Architecture

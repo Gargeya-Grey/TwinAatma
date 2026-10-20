@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*(?:\n|$)", re.S)
+FRONTMATTER_RE = re.compile(r"^\ufeff?---\s*\n(.*?)\n---\s*(?:\n|$)", re.S)
 
 
 def _parse_scalar(raw: str) -> Any:

@@ -13,6 +13,8 @@ if str(VAULT) not in sys.path:
 
 from knowledgeos.evolution import pending_outcome_reviews  # noqa: E402
 from knowledgeos.memory import MemoryAPI  # noqa: E402
+from knowledgeos.remembering import current_database as connect_database
+from knowledgeos.data_ops import write_generated  # noqa: E402
 
 DB = VAULT / "knowledge_index.db"
 
@@ -26,7 +28,7 @@ def main() -> int:
     since = today - datetime.timedelta(days=7)
     out = VAULT / "Research" / "Synthesis" / f"{today.isoformat()}-weekly-draft.md"
 
-    conn = sqlite3.connect(DB, timeout=30.0)
+    conn = connect_database(DB, timeout=30.0)
     conn.row_factory = sqlite3.Row
     recent = conn.execute(
         """
@@ -140,8 +142,11 @@ def main() -> int:
         "",
     ]
 
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        write_generated(VAULT, out, "\n".join(lines))
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
     print(f"Wrote {out}")
     return 0
 

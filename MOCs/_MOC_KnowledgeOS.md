@@ -47,22 +47,19 @@ Capture → Clarify → Connect → Commit → Execute → Review → Synthesize
 - Ecosystem: [Ecosystem MOC](_MOC_Ecosystem.md)
 
 ## Automation
-| Script | Purpose |
+A data-only vault runs no scripts. The toolkit (binary or package) does the work:
+
+| Command | Purpose |
 |---|---|
-| `python scripts/onboarding.py` | Run the cognitive onboarding wizard |
-| `python scripts/doctor.py` | Run diagnostic environment and vault health checks |
-| `python scripts/rebuild_index.py` | Refresh SQLite index |
-| `python scripts/search.py <query>` | Search notes/tags/projects/links |
-| `python scripts/weekly_data.py` | JSON weekly summary |
-| `python scripts/daily_capture_report.py` | Inspect inbox |
-| `python scripts/refinement_report.py` | Find refinement candidates |
-| `python scripts/experiment_dashboard.py` | Generate `_MOC_Experiments.md` |
-| `python scripts/update_mocs.py` | Refresh all generated dashboards |
-| `python scripts/draft_weekly_synthesis.py` | Draft weekly synthesis note |
-| `python scripts/validate_schema.py` | Validate metadata/provenance/link health |
-| `python scripts/refactor_links.py` | Automatically refactor broken paths and migrate wikilinks |
-| `python scripts/export_bundle.py --project "Example Project" --out exports/example-bundle` | Export portable markdown bundle |
-| `python scripts/publish_to_notion.py --dry-run <note>` | Dry-run/publish to Notion |
+| `twinaatma doctor` | Environment and vault diagnostics |
+| `twinaatma validate` | Validate metadata/provenance/link health |
+| `twinaatma breathe` | Autopilot tick: refresh index, load context |
+| `twinaatma memory memory_search --query "<terms>"` | Search notes/tags/projects/body |
+| `twinaatma ids assign [--write]` | Stable `kos:` entity ids |
+| `twinaatma setup-host --host cursor --write` | Write the MCP host config |
+
+Repository maintainers additionally have `scripts/` for reports, MOC generation and the
+optional Notion bridge. Those never ship into a vault.
 
 ## Maintenance Rules
 - Every non-index note should link to at least one MOC, project, concept, or decision.

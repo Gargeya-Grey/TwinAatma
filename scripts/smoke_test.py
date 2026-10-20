@@ -10,6 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from knowledgeos.database import connect_database
 from knowledgeos.ids import assign_ids_for_vault
 from knowledgeos.parser import parse_frontmatter
 from knowledgeos.self_model import load_self
@@ -24,7 +25,7 @@ def main() -> int:
     if not db.exists():
         print("MISSING_INDEX: run python scripts/rebuild_index.py", file=sys.stderr)
         return 1
-    conn = sqlite3.connect(db)
+    conn = connect_database(db)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(notes)")}
     for required in ("entity_id", "confidence", "last_reviewed", "outcome_status"):
         assert required in cols, required

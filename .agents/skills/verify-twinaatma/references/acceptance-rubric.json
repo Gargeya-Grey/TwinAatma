@@ -1,0 +1,545 @@
+{
+  "schema_version": 1,
+  "rubric_id": "twinaatma-ideal-v1",
+  "denominator": 54,
+  "weighting": "one equal-weight binary outcome per item",
+  "contract": "references/ideal-system.md",
+  "outcomes": [
+    {
+      "id": "SETUP.source_ready",
+      "gate": "SETUP",
+      "expected": "Source CLI initializes usable memory and doctor succeeds.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "setup.cli_init",
+        "setup.doctor"
+      ]
+    },
+    {
+      "id": "SETUP.artifact_install",
+      "gate": "SETUP",
+      "expected": "Each release artifact installs in isolation and initializes usable memory.",
+      "required_scope": "artifact",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "SETUP.runtime_hooks",
+      "gate": "SETUP",
+      "expected": "Generated hooks execute on every declared supported runtime.",
+      "required_scope": "artifact",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "SETUP.config_preserved",
+      "gate": "SETUP",
+      "expected": "Valid foreign configuration survives; malformed configurations survive with honest refusal.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "SETUP.post_init_failure",
+      "gate": "SETUP",
+      "expected": "Required post-init failures exit nonzero and describe partial state.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "SETUP.host_discovery",
+      "gate": "SETUP",
+      "expected": "The supported genuine host discovers tools and actually begins with its first memory call.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "host.discovery",
+        "host.first_memory_call"
+      ]
+    },
+    {
+      "id": "MEMORY.durable_capture",
+      "gate": "MEMORY",
+      "expected": "A captured note is durable and recalled after the MCP process restarts.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "memory.capture_persisted",
+        "memory.recall_after_restart"
+      ]
+    },
+    {
+      "id": "MEMORY.cross_chat_recall",
+      "gate": "MEMORY",
+      "expected": "A fact captured in genuine host chat A is recalled in a new host process/chat B.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "host.capture_from_chat",
+        "host.recall_after_restart"
+      ]
+    },
+    {
+      "id": "MEMORY.source_exact_reads",
+      "gate": "MEMORY",
+      "expected": "Direct note reads match persisted source bytes.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "memory.quote_matches_file"
+      ]
+    },
+    {
+      "id": "MEMORY.external_changes",
+      "gate": "MEMORY",
+      "expected": "External edits and removals appear automatically without retaining obsolete hits.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "freshness.edited_note",
+        "freshness.removed_note"
+      ]
+    },
+    {
+      "id": "MEMORY.correct_links",
+      "gate": "MEMORY",
+      "expected": "Relative, explicit and ambiguous links return correct neighbors or disclosed ambiguity.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "MEMORY.host_without_chores",
+      "gate": "MEMORY",
+      "expected": "The tested genuine host conversations capture and wrap useful work without user operational commands.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "host.first_memory_call",
+        "host.summary_persisted",
+        "host.no_user_ops"
+      ]
+    },
+    {
+      "id": "QUALITY.fixed_corpus",
+      "gate": "QUALITY",
+      "expected": "A versioned pre-labeled corpus has at least 30 diverse cases and a held-out split.",
+      "required_scope": "evaluation",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "QUALITY.retrieval_target",
+      "gate": "QUALITY",
+      "expected": "All critical expected facts and at least 90% of noncritical expected sources reach the first eight notes in the fixed corpus.",
+      "required_scope": "evaluation",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "QUALITY.host_grounding_examples",
+      "gate": "QUALITY",
+      "expected": "The genuine host acceptance answers ground the recalled fact and abstain on an unsupported personal question.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "host.grounded_answer",
+        "host.unknown_abstains"
+      ]
+    },
+    {
+      "id": "QUALITY.correction_lifecycle",
+      "gate": "QUALITY",
+      "expected": "Later advice distinguishes superseded, current, contextual, inferred and unknown claims after corrections.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "QUALITY.representative_week",
+      "gate": "QUALITY",
+      "expected": "At least 20 useful conversations over a week include reopenings and simultaneous chats with zero chores or unchanged repeat prompts.",
+      "required_scope": "longitudinal",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "IDENTITY.unknown_stays_unknown",
+      "gate": "IDENTITY",
+      "expected": "Cold-start identity attributes no invented personal values or preferences.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "IDENTITY.proposal_boundary",
+      "gate": "IDENTITY",
+      "expected": "Proposal, tool refusal and rejection preserve Self bytes and persist the truthful proposal state.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "identity.proposal_persisted",
+        "identity.tool_refuses",
+        "identity.rejection_recorded",
+        "identity.bytes_unchanged"
+      ]
+    },
+    {
+      "id": "IDENTITY.canonical_sections",
+      "gate": "IDENTITY",
+      "expected": "Readers and writers agree on canonical sections and reject duplicate markers.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "IDENTITY.owner_exact_approval",
+      "gate": "IDENTITY",
+      "expected": "An independent human owner reviews and approves the exact change against its expected base in their terminal.",
+      "required_scope": "human",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "IDENTITY.integrity_refusal",
+      "gate": "IDENTITY",
+      "expected": "Tamper, stale-base, replay and invalid approval state fail closed with unchanged identity.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "IDENTITY.all_writers_preserve",
+      "gate": "IDENTITY",
+      "expected": "Every supported alternative writer and maintenance path preserves protected identity.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "SESSION.independent_chats",
+      "gate": "SESSION",
+      "expected": "Distinct MCP chats retain independent lifecycle state and completed counters.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "session.concurrent_chats_independent"
+      ]
+    },
+    {
+      "id": "SESSION.retry_idempotency",
+      "gate": "SESSION",
+      "expected": "Replayed starts and ends are idempotent; changed-content end replay is refused.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "session.concurrent_chats_independent",
+        "session.end_retry_idempotent",
+        "session.conflicting_retry_refused"
+      ]
+    },
+    {
+      "id": "SESSION.unfinished_survives",
+      "gate": "SESSION",
+      "expected": "Completing one chat and ending another through its hook preserves only the latter as unfinished.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "recovery.hook_leaves_only_interrupted_chat"
+      ]
+    },
+    {
+      "id": "SESSION.prompt_once",
+      "gate": "SESSION",
+      "expected": "Start, wrap and later starts do not repeat unchanged preference or interruption prompts.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "experience.prompt_once",
+        "experience.orphan_prompt_once"
+      ]
+    },
+    {
+      "id": "SESSION.host_correlation",
+      "gate": "SESSION",
+      "expected": "The genuine host retains the returned session ID and uses it for a durably persisted wrap-up.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": false,
+      "checks": [
+        "host.session_id_propagated",
+        "host.summary_persisted"
+      ]
+    },
+    {
+      "id": "RECOVERY.capture_error_visible",
+      "gate": "RECOVERY",
+      "expected": "A failed summary is a protocol error and leaves recoverable unfinished work.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "recovery.failed_summary_stays_pending"
+      ]
+    },
+    {
+      "id": "RECOVERY.index_degradation",
+      "gate": "RECOVERY",
+      "expected": "Missing/corrupt indexes recover and busy/blocked indexes disclose incomplete results without losing source truth.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "RECOVERY.concurrent_writers",
+      "gate": "RECOVERY",
+      "expected": "Twenty simultaneous MCP captures preserve all distinct bodies and recall after restart.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "recovery.twenty_capture_writers",
+        "memory.concurrent_bodies_recalled"
+      ]
+    },
+    {
+      "id": "RECOVERY.ownership_locks",
+      "gate": "RECOVERY",
+      "expected": "Live locks are never stolen; dead owners and failed lock creation recover without deleting unrelated ownership.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "RECOVERY.retries_converge",
+      "gate": "RECOVERY",
+      "expected": "Restored summary capture retries converge on exactly one retained episode.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": [
+        "recovery.restored_summary_saved_once"
+      ]
+    },
+    {
+      "id": "LEARNING.decision_views",
+      "gate": "LEARNING",
+      "expected": "Decision, timeline and pending-outcome views preserve source, status and truthful freshness.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "LEARNING.host_outcome_loop",
+      "gate": "LEARNING",
+      "expected": "An ordinary host conversation closes the correct outcome and stops asking about it.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "LEARNING.attributed_lessons",
+      "gate": "LEARNING",
+      "expected": "Completed outcomes support source-linked lessons with explicit uncertainty.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "LEARNING.semantic_drift",
+      "gate": "LEARNING",
+      "expected": "Mechanical churn creates no belief claim; corroborated semantic change yields an attributed uncertain proposal.",
+      "required_scope": "longitudinal",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "LEARNING.rejection_recurrence",
+      "gate": "LEARNING",
+      "expected": "Rejected or superseded suggestions do not recur on unchanged evidence.",
+      "required_scope": "longitudinal",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "PRIVACY.explicit_policy",
+      "gate": "PRIVACY",
+      "expected": "Capture, exclusion, retention, correction and forgetting policies are explicit and applied.",
+      "required_scope": "policy",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PRIVACY.selective_capture",
+      "gate": "PRIVACY",
+      "expected": "Synthetic credentials and sensitive third-party details follow the agreed capture policy.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PRIVACY.exposure_scope",
+      "gate": "PRIVACY",
+      "expected": "Notes, context, logs and bundles contain only policy-permitted data.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PRIVACY.untrusted_notes",
+      "gate": "PRIVACY",
+      "expected": "Adversarial notes remain evidence and cannot override trusted instructions.",
+      "required_scope": "real_host",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PRIVACY.external_writes",
+      "gate": "PRIVACY",
+      "expected": "Local verification makes no unauthorized external publishing requests; supported dry runs send none.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.safe_export",
+      "gate": "DATA",
+      "expected": "Export refuses existing outputs, source overlap and links, preserves source bytes, and declares dependency omissions.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.atomic_generated",
+      "gate": "DATA",
+      "expected": "Generated reports use contained atomic writes, refuse links and user edits, and preserve originals on faults.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.safe_maintenance",
+      "gate": "DATA",
+      "expected": "ID/schema/link/map maintenance preserves identity, proposal evidence, fenced examples and originals on failures.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.preserve_hooks",
+      "gate": "DATA",
+      "expected": "Hook installation preserves existing hooks and honors contained custom hook paths.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.honest_validation",
+      "gate": "DATA",
+      "expected": "Validation distinguishes good data from broken/ambiguous links, invalid schema and duplicate IDs.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "DATA.memory_census",
+      "gate": "DATA",
+      "expected": "Instructions, generated reports and synthetic fixtures never enter personal memory indexing.",
+      "required_scope": "source",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PORT.same_device_move",
+      "gate": "PORT",
+      "expected": "A same-device vault move preserves note/link content, retrieval and declared host wiring.",
+      "required_scope": "artifact",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    },
+    {
+      "id": "PORT.clean_device_restore",
+      "gate": "PORT",
+      "expected": "A clean-device restore preserves content and reconnects the supported host with explicit operational dependencies.",
+      "required_scope": "clean_device",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PORT.missing_signing_state",
+      "gate": "PORT",
+      "expected": "Missing signing state refuses old approvals recoverably without silently approving or corrupting identity.",
+      "required_scope": "artifact",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PORT.upgrade_divergence",
+      "gate": "PORT",
+      "expected": "Upgrades preserve data/compatibility and divergent devices follow an explicit tested conflict and approval policy.",
+      "required_scope": "artifact",
+      "mandatory": true,
+      "critical": true,
+      "checks": []
+    },
+    {
+      "id": "PORT.measured_resource_budget",
+      "gate": "PORT",
+      "expected": "Named-device repeated startup/capture/recall samples at 100/1000/10000 notes include context bytes and p50/p95 and satisfy an agreed resource budget.",
+      "required_scope": "performance",
+      "mandatory": true,
+      "critical": false,
+      "checks": []
+    }
+  ]
+}

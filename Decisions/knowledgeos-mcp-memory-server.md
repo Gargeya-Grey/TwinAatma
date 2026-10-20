@@ -47,7 +47,7 @@ Write policy:
 
 ## Tools (v1)
 
-`memory_self_get`, `memory_search`, `memory_related`, `memory_get_note`, `memory_decisions`, `memory_drift`, `memory_capture`, `memory_propose_self_update`, `memory_accept_self_update`, `memory_propose_note_update`, `memory_timeline`, `memory_bootstrap_context`
+`memory_self_get`, `memory_search`, `memory_related`, `memory_get_note`, `memory_decisions`, `memory_drift`, `memory_capture`, `memory_propose_self_update`, `memory_accept_self_update` (always refuses; approval is `twinaatma self approve` in a terminal), `memory_propose_note_update`, `memory_timeline`, `memory_bootstrap_context`
 
 ## Client config
 

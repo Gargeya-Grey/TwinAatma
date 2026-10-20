@@ -1,30 +1,22 @@
 #!/usr/bin/env python3
-"""Add KnowledgeOS properties to the Notion database + publish note"""
-import json, os, sys, urllib.request, urllib.error
+"""Optional Notion schema setup and explicitly opted-in source-note publishing."""
+import json
+import os
+import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _notion_env
+import publish_to_notion
 
-KEY = _notion_env.get_notion_key()
-DS_ID = _notion_env.get_notion_database_id()
 
-def notion_api(method, path, data=None):
-    req = urllib.request.Request(
-        f'https://api.notion.com/v1/{path}',
-        data=json.dumps(data).encode() if data else None,
-        method=method,
-        headers={
-            'Authorization': f'Bearer {KEY}',
-            'Notion-Version': '2025-09-03',
-            'Content-Type': 'application/json'
-        }
-    )
-    resp = urllib.request.urlopen(req)
-    return json.loads(resp.read())
-
-def update_database():
+def update_database(dry_run=False, key=None, ds_id=None):
     """Add Obsidian Link and Note Type properties to the database"""
+    if dry_run:
+        print("DRY RUN: Would ensure Obsidian Link and Note Type properties exist.")
+        return True
+    key = key or _notion_env.get_notion_key()
+    ds_id = ds_id or _notion_env.get_notion_database_id()
     print("Adding KnowledgeOS properties to database...")
-    ds = notion_api('GET', f'data_sources/{DS_ID}')
+    ds = publish_to_notion.notion_api('GET', f'data_sources/{ds_id}', key=key)
     existing = list(ds.get('properties', {}).keys())
     print(f"Existing properties: {existing}")
 
@@ -46,66 +38,46 @@ def update_database():
         }
 
     if props_to_add:
-        result = notion_api('PATCH', f'data_sources/{DS_ID}', {'properties': props_to_add})
+        publish_to_notion.notion_api('PATCH', f'data_sources/{ds_id}', {'properties': props_to_add}, key=key)
         for k in props_to_add:
             print(f"  Added: {k}")
     else:
         print("  All KnowledgeOS properties already exist.")
     print()
+    return True
 
-def publish_note_to_notion(note_data):
-    """Publish an Obsidian note to the Notion database."""
-    properties = {
-        'Idea': {'title': [{'text': {'content': note_data.get('title', 'Untitled')}}]},
-    }
 
-    if note_data.get('category'):
-        properties['Category'] = {'multi_select': [{'name': c} for c in note_data['category']]}
-    if note_data.get('status'):
-        properties['Status'] = {'select': {'name': note_data['status']}}
-    if note_data.get('priority'):
-        properties['Priority'] = {'select': {'name': note_data['priority']}}
-    if note_data.get('next_action'):
-        properties['Next Action'] = {'rich_text': [{'text': {'content': note_data['next_action'][:2000]}}]}
-    if note_data.get('context'):
-        properties['Context'] = {'select': {'name': note_data['context']}}
-    if note_data.get('obsidian_link'):
-        properties['Obsidian Link'] = {'url': note_data['obsidian_link']}
-    if note_data.get('note_type'):
-        properties['Note Type'] = {'select': {'name': note_data['note_type']}}
+def publish_note_to_notion(note_data, dry_run=False):
+    """Publish from the source file; arbitrary JSON cannot establish note opt-in."""
+    source = note_data.get("source_path") if isinstance(note_data, dict) else note_data
+    if not isinstance(source, str) or not source:
+        print("FAILED: Supply a source note path. Unscoped JSON publishing is unsupported.")
+        return False
+    args = [source]
+    if dry_run:
+        args.insert(0, "--dry-run")
+    return publish_to_notion.main(args) == 0
 
-    body = {
-        'parent': {'type': 'data_source_id', 'data_source_id': DS_ID},
-        'properties': properties,
-    }
 
-    if note_data.get('body'):
-        body['children'] = [
-            {'object': 'block', 'type': 'paragraph', 'paragraph': {
-                'rich_text': [{'text': {'content': note_data['body'][:1990]}}]
-            }}
-        ]
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    dry_run = "--dry-run" in argv
+    argv = [arg for arg in argv if arg != "--dry-run"]
+    action = argv[0] if argv else "setup"
+    try:
+        if action == "setup":
+            return 0 if update_database(dry_run=dry_run) else 1
+        if action == "publish":
+            source = argv[1] if len(argv) > 1 else sys.stdin.read().strip()
+            if source.startswith("{"):
+                source = json.loads(source)
+            return 0 if publish_note_to_notion(source, dry_run=dry_run) else 1
+        print("Usage: notion_bridge.py [--dry-run] setup | publish <source-note.md>")
+        return 1
+    except Exception as exc:
+        print(f"FAILED: {exc}")
+        return 1
 
-    result = notion_api('POST', 'pages', body)
-    page_id = result.get('id', '')
-    page_url = result.get('url', result.get('public_url', ''))
-    print(f"  Published to Notion: {page_url}")
-    return page_id
 
 if __name__ == '__main__':
-    action = sys.argv[1] if len(sys.argv) > 1 else 'setup'
-
-    if action == 'setup':
-        update_database()
-        print("Database ready for KnowledgeOS publishing.")
-        print(f"  Database ID: {DS_ID}")
-        print("  To publish: python3 scripts/notion_bridge.py publish '{\"title\":\"...\"}'")
-
-    elif action == 'publish':
-        import ast
-        note_data_str = sys.argv[2] if len(sys.argv) > 2 else sys.stdin.read()
-        try:
-            note_data = json.loads(note_data_str)
-        except json.JSONDecodeError:
-            note_data = ast.literal_eval(note_data_str)
-        publish_note_to_notion(note_data)
+    sys.exit(main())

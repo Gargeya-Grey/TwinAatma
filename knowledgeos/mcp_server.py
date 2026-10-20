@@ -14,6 +14,8 @@ from typing import Any
 
 from knowledgeos.memory import TOOL_SPECS, MemoryAPI, dispatch
 
+MAX_FRAME_BYTES = 32 * 1024 * 1024
+
 
 def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
@@ -75,7 +77,16 @@ class MCPServer:
             try:
                 result = dispatch(self.api, name, arguments)
                 payload = json.dumps(result, indent=2, default=str)
-                is_error = isinstance(result, dict) and "error" in result
+                # A protocol-level failure is any result that reports one, not only one
+                # whose top-level key is literally `error`: refusals also arrive as
+                # `{"ok": False, ...}` and `{"missing": [...]}`, and a strict client that
+                # trusts `isError` treated those as success.
+                is_error = isinstance(result, dict) and (
+                    "error" in result
+                    or result.get("ok") is False
+                    or bool(result.get("missing"))
+                    or bool(result.get("failed"))
+                )
                 return {
                     "jsonrpc": "2.0",
                     "id": msg_id,
@@ -107,7 +118,7 @@ class MCPServer:
 def run_stdio(vault: Path | None = None) -> None:
     vault = vault or _vault_from_env()
     server = MCPServer(vault)
-    _log(f"KnowledgeOS MCP Memory server ready. vault={vault}")
+    _log(f"TwinAatma MCP Memory server ready. vault={vault}")
 
     for line in sys.stdin:
         line = line.strip()
@@ -118,11 +129,22 @@ def run_stdio(vault: Path | None = None) -> None:
         except json.JSONDecodeError as e:
             _log(f"invalid json: {e}")
             continue
-        # Support Content-Length framed messages if a host sends them as single-line JSON still;
-        # Cursor typically uses newline-delimited or Content-Length. Handle both simply:
-        resp = server.handle(msg)
+        if not isinstance(msg, dict):
+            _log("unsupported message: JSON-RPC batches are not supported")
+            continue
+        try:
+            resp = server.handle(msg)
+        except Exception as e:
+            _log(f"handler error: {e}")
+            if msg.get("id") is None:
+                continue
+            resp = {
+                "jsonrpc": "2.0",
+                "id": msg.get("id"),
+                "error": {"code": -32603, "message": str(e)},
+            }
         if resp is not None:
-            sys.stdout.write(json.dumps(resp) + "\n")
+            sys.stdout.write(json.dumps(resp, default=str) + "\n")
             sys.stdout.flush()
 
 
@@ -143,21 +165,48 @@ def run_stdio_content_length(vault: Path | None = None) -> None:
                 break
             try:
                 key, val = line.decode("utf-8").split(":", 1)
-                headers[key.strip().lower()] = val.strip()
+                key = key.strip().lower()
+                if key == "content-length" and key in headers:
+                    _log("duplicate Content-Length header; closing connection")
+                    return
+                headers[key] = val.strip()
             except ValueError:
                 continue
-        length = int(headers.get("content-length", "0"))
+        length = 0
+        try:
+            length = int(headers.get("content-length", "0"))
+        except ValueError:
+            length = 0
         if length <= 0:
-            continue
+            # Without a usable length the stream is out of sync: we cannot know where
+            # the next frame starts, so continuing would parse header bytes as JSON.
+            _log("missing or invalid Content-Length; closing connection")
+            return
+        if length > MAX_FRAME_BYTES:
+            _log(f"frame of {length} bytes exceeds limit; closing connection")
+            return
         body = stdin.read(length)
-        if not body:
+        if not body or len(body) < length:
             return
         try:
             msg = json.loads(body.decode("utf-8"))
         except json.JSONDecodeError as e:
             _log(f"invalid json body: {e}")
             continue
-        resp = server.handle(msg)
+        if not isinstance(msg, dict):
+            _log("unsupported message: JSON-RPC batches are not supported")
+            continue
+        try:
+            resp = server.handle(msg)
+        except Exception as e:
+            _log(f"handler error: {e}")
+            if msg.get("id") is None:
+                continue
+            resp = {
+                "jsonrpc": "2.0",
+                "id": msg.get("id"),
+                "error": {"code": -32603, "message": str(e)},
+            }
         if resp is None:
             continue
         payload = json.dumps(resp).encode("utf-8")
@@ -167,9 +216,97 @@ def run_stdio_content_length(vault: Path | None = None) -> None:
         sys.stdout.buffer.flush()
 
 
+def run_stdio_auto(vault: Path | None = None) -> None:
+    """MCP over stdio, accepting newline-delimited JSON or Content-Length frames.
+
+    Each reply uses the framing of the request it answers, so either host convention works.
+    """
+    vault = vault or _vault_from_env()
+    server = MCPServer(vault)
+    _log(f"KnowledgeOS MCP Memory server ready (auto framing). vault={vault}")
+
+    stdin = sys.stdin.buffer
+    stdout = sys.stdout.buffer
+    while True:
+        try:
+            line = stdin.readline()
+        except (OSError, ValueError) as exc:
+            _log(f"stdin error: {exc}")
+            return
+        if not line:
+            return
+        stripped = line.strip()
+        if not stripped:
+            continue
+        framed = stripped.lower().startswith(b"content-length:")
+        if framed:
+            try:
+                length = int(stripped.split(b":", 1)[1].strip())
+            except (ValueError, IndexError):
+                # Header line is malformed, so the body boundary is unknown too.
+                _log("invalid Content-Length header; closing connection")
+                return
+            if length <= 0 or length > MAX_FRAME_BYTES:
+                # A frame we refuse to read leaves the stream desynchronised; the
+                # body would be reinterpreted as headers. Closing is the only
+                # honest recovery, and the host will restart us.
+                _log(f"refusing frame of {length} bytes; closing connection")
+                return
+            while True:
+                header = stdin.readline()
+                if not header:
+                    return
+                if header in (b"\r\n", b"\n"):
+                    break
+                if header.strip().lower().startswith(b"content-length:"):
+                    _log("duplicate Content-Length header; closing connection")
+                    return
+            try:
+                body = stdin.read(length)
+            except (OSError, ValueError) as exc:
+                _log(f"stdin error: {exc}")
+                return
+        else:
+            body = stripped
+        try:
+            msg = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError) as exc:
+            _log(f"invalid json: {exc}")
+            continue
+        if not isinstance(msg, dict):
+            _log("unsupported message: JSON-RPC batches are not supported")
+            continue
+        try:
+            resp = server.handle(msg)
+        except Exception as exc:
+            _log(f"handler error: {exc}")
+            if msg.get("id") is None:
+                continue
+            resp = {
+                "jsonrpc": "2.0",
+                "id": msg.get("id"),
+                "error": {"code": -32603, "message": str(exc)},
+            }
+        if resp is None:
+            continue
+        payload = json.dumps(resp, default=str).encode("utf-8")
+        try:
+            if framed:
+                stdout.write(f"Content-Length: {len(payload)}\r\n\r\n".encode("ascii") + payload)
+            else:
+                stdout.write(payload + b"\n")
+            stdout.flush()
+        except (OSError, ValueError) as exc:
+            # The host closed the pipe; nothing left to talk to.
+            _log(f"stdout closed: {exc}")
+            return
+
+
 if __name__ == "__main__":
-    mode = os.environ.get("KNOWLEDGEOS_MCP_FRAMING", "content-length")
+    mode = os.environ.get("KNOWLEDGEOS_MCP_FRAMING", "auto")
     if mode == "ndjson":
         run_stdio()
-    else:
+    elif mode == "content-length":
         run_stdio_content_length()
+    else:
+        run_stdio_auto()

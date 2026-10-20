@@ -1,16 +1,31 @@
 # PyInstaller spec for the single `twinaatma` binary.
-# Build:  pyinstaller pyinstaller.spec   (or: python -m PyInstaller pyinstaller.spec)
+# Build from the repo root:  pyinstaller pyinstaller.spec
 # Output: dist/twinaatma/twinaatma (.exe on Windows)
 # Core stays stdlib-only (sqlite FTS5 ships with Python), so no hidden imports needed.
-# Dev fallback remains: python -m knowledgeos <command>
+# Starter files are bundled so `twinaatma init` can create a complete vault; they are
+# located at runtime via knowledgeos.resources.toolkit_root().
+import os
+
+ROOT = SPECPATH
 
 block_cipher = None
 
+datas = [
+    (os.path.join(ROOT, "Templates"), "Templates"),
+    (os.path.join(ROOT, "AGENTS.md"), "."),
+    (os.path.join(ROOT, "LICENSE"), "."),
+    (os.path.join(ROOT, "README.md"), "."),
+    (os.path.join(ROOT, "knowledgeos.config.example.json"), "."),
+    (os.path.join(ROOT, ".cursor", "hooks.json"), ".cursor"),
+    (os.path.join(ROOT, ".cursor", "hooks"), os.path.join(".cursor", "hooks")),
+    (os.path.join(ROOT, ".cursor", "rules"), os.path.join(".cursor", "rules")),
+]
+
 a = Analysis(
-    ["knowledgeos/binary_entry.py"],
-    pathex=["."],
+    [os.path.join(ROOT, "knowledgeos", "binary_entry.py")],
+    pathex=[ROOT],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=[],
     hookspath=[],
     runtime_hooks=[],

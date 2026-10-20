@@ -11,4 +11,22 @@ __all__ = [
     "SCHEMA_V03",
 ]
 
-__version__ = "0.4.0-dev"
+FALLBACK_VERSION = "0.4.0"
+
+
+def _detect_version() -> str:
+    """Prefer the installed distribution's version.
+
+    ``__version__`` used to be a hand-written string that disagreed with
+    ``pyproject.toml``, so `twinaatma version` and the wheel metadata could report
+    different numbers and a bug report would name the wrong build.
+    """
+    try:
+        from importlib.metadata import version as _dist_version
+
+        return _dist_version("twinaatma")
+    except Exception:
+        return FALLBACK_VERSION
+
+
+__version__ = _detect_version()

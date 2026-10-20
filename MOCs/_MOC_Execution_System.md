@@ -57,17 +57,15 @@ Hermes should answer: **How do I transform messy knowledge into structured insig
 ## Operating Cadence
 
 ### Daily
-1. Capture raw ideas into Inbox.
-2. Run `python scripts/daily_capture_report.py`.
-3. Process urgent captures into typed notes.
-4. Rebuild index if notes changed.
+1. Capture raw ideas into Inbox — or just tell the agent and it captures for you.
+2. Process urgent captures into typed notes.
+3. The index refreshes itself before the next search.
 
 ### Weekly
-1. Run `python scripts/rebuild_index.py`.
-2. Run `python scripts/update_mocs.py`.
-3. Run `python scripts/draft_weekly_synthesis.py`.
-4. Review active projects and experiments.
-5. Decide what moves to Notion or becomes an action.
+1. Ask the agent for a week summary; it loads the timeline and drift signals.
+2. Review the single drift proposal it drafted (yes/no).
+3. Review active projects and experiments.
+4. Decide what moves to Notion or becomes an action.
 
 ### Monthly
 1. Use [Monthly Review Template](../Templates/t-monthly-review.md).

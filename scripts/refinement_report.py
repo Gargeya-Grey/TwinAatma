@@ -1,15 +1,17 @@
 #!/usr/bin/env python
 """Report notes that may be ready for refinement/publishing or need cleanup."""
 from pathlib import Path
-import re, sqlite3, json
+import re, sqlite3, json, sys
 VAULT=Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(VAULT))
+from knowledgeos.remembering import current_database as connect_database, RememberingPolicy
 DB=VAULT/'knowledge_index.db'
-conn=sqlite3.connect(DB, timeout=30.0); conn.row_factory=sqlite3.Row
+conn=connect_database(DB, timeout=30.0); conn.row_factory=sqlite3.Row
 rows=conn.execute("select * from notes where path not like 'Templates/%' order by updated desc, path").fetchall()
 report={"ready_candidates":[],"needs_links":[],"placeholders":[],"active_without_next_actions":[]}
 for r in rows:
     path=VAULT/r['path']
-    text=path.read_text(encoding='utf-8',errors='replace') if path.exists() else ''
+    text=RememberingPolicy(VAULT).read(path, historical=False) or ''
     links=re.findall(r'\[\[[^\]]+\]\]', text)
     placeholders=len(re.findall(r'Placeholder|_To fill|To fill|TODO|\n-\s*$', text, re.I|re.M))
     has_next='Next Action' in text or 'Next Actions' in text or 'Next Steps' in text
