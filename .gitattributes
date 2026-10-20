@@ -1,0 +1,2 @@
+# Keep the sealed evaluation fixture byte-identical on every checkout.
+tests/fixtures/quality-v1.json text eol=lf

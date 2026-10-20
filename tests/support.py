@@ -81,7 +81,7 @@ class TempVaultCase(unittest.TestCase):
         from knowledgeos.init_vault import init_vault
 
         self._tmp = tempfile.TemporaryDirectory(prefix="ta-test-")
-        self.root = Path(self._tmp.name)
+        self.root = Path(self._tmp.name).resolve()
         self.vault = self.root / "vault"
         # Keep the gate ledger, key and lock out of the real install so tests are
         # hermetic and can never touch the machine's actual proposal history.

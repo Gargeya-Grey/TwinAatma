@@ -183,6 +183,7 @@ class Case:
     def build(cls, root: Path) -> "Case":
         from knowledgeos.init_vault import init_vault
 
+        root = root.resolve()
         state_dir = root / "state"
         os.environ["KNOWLEDGEOS_STATE_DIR"] = str(state_dir)
         vault = root / "vault"

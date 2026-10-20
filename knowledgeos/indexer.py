@@ -246,6 +246,8 @@ def iter_markdown(vault: Path) -> list[Path]:
             if _is_link(path):
                 continue
             try:
+                if not stat.S_ISREG(path.lstat().st_mode):
+                    continue
                 resolved = path.resolve()
             except OSError:
                 continue
