@@ -87,12 +87,12 @@ class FollowupReviewTests(unittest.TestCase):
         self.assertNotIn("error", value)
         return value
 
-    def decision(self, name="RoleBoundaries", extra="", title="Role boundaries"):
+    def decision(self, name="RoleBoundaries", extra="", title="Role boundaries", updated="2026-06-18"):
         relative = "Decisions/" + name + ".md"
         path = self.vault / relative
         path.parent.mkdir(exist_ok=True)
         path.write_text("---\ntype: decision\ntitle: " + title + "\nstatus: active\n"
-                        "created: 2026-06-18\nupdated: 2026-06-18\n" + extra +
+                        "created: 2026-06-18\nupdated: " + updated + "\n" + extra +
                         "---\n# Synthetic decision\nLilacboundarytoken describes enduring role boundaries.\n",
                         encoding="utf-8")
         self.sources[relative] = sha(path)
@@ -183,9 +183,10 @@ class FollowupReviewTests(unittest.TestCase):
         self.assertEqual(start["soft_prompt"], "Quick check — how did “Courier pilot” turn out?")
 
     def queue_first_eight_reviews(self):
-        for index in range(9):
+        for index in reversed(range(9)):
             self.decision(name="Due" + str(index).zfill(2), extra="outcome_status: pending\n",
-                          title="Courier pilot " + str(index).zfill(2))
+                          title="Courier pilot " + str(index).zfill(2),
+                          updated="2026-06-" + str(18 + index))
         for index in range(8):
             start = self.tool("memory_session_start", task_hint="Review a scheduled outcome",
                               session_id="queue-" + str(index))

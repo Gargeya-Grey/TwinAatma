@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import hashlib
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest import mock
 
@@ -141,6 +143,28 @@ class TempVaultCase(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         return path
+
+    @contextmanager
+    def directory_link(self, path: Path, target: Path):
+        """Use a native junction on Windows and a real directory symlink elsewhere."""
+        if os.name == "nt":
+            made = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(path), str(target)],
+                capture_output=True, text=True,
+            )
+            if made.returncode != 0:
+                self.skipTest(f"junctions unavailable: {made.stderr.strip()}")
+        else:
+            os.symlink(target, path, target_is_directory=True)
+        try:
+            self.assertTrue(path.is_dir())
+            self.assertEqual(path.resolve(), target.resolve())
+            yield
+        finally:
+            if os.name == "nt":
+                path.rmdir()
+            else:
+                path.unlink()
 
     def proposal_files(self) -> list[Path]:
         return sorted((self.vault / "People" / "Self-Proposals").glob("*.md"))

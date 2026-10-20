@@ -16,6 +16,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 from pathlib import Path
 
 
@@ -131,17 +132,25 @@ def _atomic_file(path: Path, payload: bytes, *, exclusive: bool = False, mode: i
             os.fsync(handle.fileno())
         if mode is not None:
             os.chmod(tmp, mode)
-        # Re-check the *name* now that the descriptor is closed. Nothing should have been
-        # able to swap it, but a rename over an open handle on Windows fails anyway.
-        named = os.lstat(tmp)
-        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1:
-            raise OSError("refusing to replace a target from an unexpected temp file")
-        if exclusive:
-            # link is an atomic create-if-absent on the same filesystem. Unlike
-            # replace, it cannot overwrite a hook another writer just installed.
-            os.link(tmp, path)
-        else:
-            os.replace(tmp, path)
+        for attempt in range(6):
+            named = os.lstat(tmp)
+            if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                    or (named.st_dev, named.st_ino) != (info.st_dev, info.st_ino)):
+                raise OSError("refusing to replace a target from an unexpected temp file")
+            try:
+                if exclusive:
+                    # link is an atomic create-if-absent on the same filesystem. Unlike
+                    # replace, it cannot overwrite a hook another writer just installed.
+                    os.link(tmp, path)
+                else:
+                    os.replace(tmp, path)
+                break
+            except OSError as error:
+                # Some native Windows replacement refusals clear after a short delay.
+                if (exclusive or os.name != "nt" or getattr(error, "winerror", None) != 5
+                        or attempt == 5):
+                    raise
+                time.sleep(0.01 * 2 ** attempt)
     finally:
         if handle_fd != -1:
             with contextlib.suppress(OSError):

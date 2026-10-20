@@ -737,20 +737,12 @@ class IndexIntegrityTests(TempVaultCase):
     def test_reject_cannot_be_used_to_write_outside_the_vault(self):
         """`propose` skipped the directory check that apply and reject both perform."""
         import shutil as _shutil
-        import subprocess as _subprocess
 
         outside = self.root / "outside"
         outside.mkdir()
         proposals = self.vault / "People" / "Self-Proposals"
         _shutil.rmtree(proposals)
-        made = _subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(proposals), str(outside)],
-            capture_output=True,
-            text=True,
-        )
-        if not proposals.exists():
-            self.skipTest(f"junctions unavailable: {made.stderr.strip()}")
-        try:
+        with self.directory_link(proposals, outside):
             result = self.api().propose_self_update(
                 "s", "heuristics", "* A rule.", mode="append"
             )
@@ -758,8 +750,6 @@ class IndexIntegrityTests(TempVaultCase):
             self.assertEqual(
                 list(outside.iterdir()), [], "a proposal file was written outside the vault"
             )
-        finally:
-            _subprocess.run(["cmd", "/c", "rmdir", str(proposals)], capture_output=True)
 
     def test_a_proposal_cannot_write_through_a_junctioned_inbox(self):
         """`propose_note_update` wrote first and checked containment second.
@@ -770,7 +760,6 @@ class IndexIntegrityTests(TempVaultCase):
         reported as an error. Containment has to be established before the bytes leave.
         """
         import shutil as _shutil
-        import subprocess as _subprocess
 
         api = self.api()
         target = self.vault / "Concepts" / "host.md"
@@ -783,14 +772,7 @@ class IndexIntegrityTests(TempVaultCase):
         outside.mkdir()
         inbox = self.vault / "Inbox"
         _shutil.rmtree(inbox)
-        made = _subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(inbox), str(outside)],
-            capture_output=True,
-            text=True,
-        )
-        if not inbox.exists():
-            self.skipTest(f"junctions unavailable: {made.stderr.strip()}")
-        try:
+        with self.directory_link(inbox, outside):
             result = api.propose_note_update("Concepts/host.md", "s", "* new body\n")
             self.assertIn("error", result)
             self.assertEqual(
@@ -801,8 +783,6 @@ class IndexIntegrityTests(TempVaultCase):
             self.assertEqual(
                 list(outside.iterdir()), [], "a capture was written outside the vault"
             )
-        finally:
-            _subprocess.run(["cmd", "/c", "rmdir", str(inbox)], capture_output=True)
 
     def test_an_unexpected_format_character_is_refused_but_real_script_is_not(self):
         """Refusing every `Cf` made a family emoji or a Persian word unproposable.
@@ -1188,8 +1168,6 @@ class VaultIntegrityTests(TempVaultCase):
 
     def test_ids_does_not_follow_a_junction_out_of_the_vault(self):
         """`rglob` follows junctions, so `ids assign --write` rewrote files outside."""
-        import subprocess as _subprocess
-
         from knowledgeos import ids
 
         outside = Path(self._tmp.name) / "outside"
@@ -1201,15 +1179,9 @@ class VaultIntegrityTests(TempVaultCase):
         )
         before = victim.read_bytes()
         jump = self.vault / "Inbox" / "jump"
-        made = _subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(jump), str(outside)],
-            capture_output=True,
-            text=True,
-        )
-        if not jump.exists():
-            self.skipTest(f"junctions unavailable: {made.stderr.strip()}")
-        ids.assign_ids_for_vault(self.vault, write=True)
-        self.assertEqual(before, victim.read_bytes(), "a junction outside the vault was rewritten")
+        with self.directory_link(jump, outside):
+            ids.assign_ids_for_vault(self.vault, write=True)
+            self.assertEqual(before, victim.read_bytes(), "a junction outside the vault was rewritten")
 
     def test_validate_uses_the_same_file_set_as_the_index(self):
         import inspect
@@ -2398,7 +2370,6 @@ class GateBoundaryTests(TempVaultCase):
     def test_reject_cannot_be_redirected_into_self_md(self):
         """`reject` writes without a TTY, so it must not be able to reach identity."""
         import shutil as _shutil
-        import subprocess as _subprocess
 
         from knowledgeos import gate as _gate
 
@@ -2412,35 +2383,29 @@ class GateBoundaryTests(TempVaultCase):
 
         # Indirect: `People/Self-Proposals` replaced by a junction to `People`.
         _shutil.rmtree(api.proposals_dir)
-        made = _subprocess.run(
-            ["cmd", "/c", "mklink", "/J", str(api.proposals_dir), str(self.vault / "People")],
-            capture_output=True,
-            text=True,
-        )
-        if not api.proposals_dir.exists():
-            self.skipTest(f"junctions unavailable: {made.stderr.strip()}")
-        rows, _ = _gate.read_ledger(self.vault)
-        rows.append(
-            {
-                "id": "x",
-                "created": "2026-01-01T00:00:00",
-                "proposal": "People/Self-Proposals/Self.md",
-                "section": "heuristics",
-                "mode": "append",
-                "base_digest": "x",
-                "body_sha256": "x",
-                "file_sha256": "",
-                "status": "draft",
-            }
-        )
-        _gate._write_ledger(self.vault, rows)
-        redirected = api.reject_self_update("People/Self-Proposals/Self.md", "agent text")
-        self.assertIn("error", redirected)
-        self.assertEqual(
-            before,
-            (self.vault / "People" / "Self.md").read_bytes(),
-            "a junction turned reject into a second writer of Self.md",
-        )
+        with self.directory_link(api.proposals_dir, self.vault / "People"):
+            rows, _ = _gate.read_ledger(self.vault)
+            rows.append(
+                {
+                    "id": "x",
+                    "created": "2026-01-01T00:00:00",
+                    "proposal": "People/Self-Proposals/Self.md",
+                    "section": "heuristics",
+                    "mode": "append",
+                    "base_digest": "x",
+                    "body_sha256": "x",
+                    "file_sha256": "",
+                    "status": "draft",
+                }
+            )
+            _gate._write_ledger(self.vault, rows)
+            redirected = api.reject_self_update("People/Self-Proposals/Self.md", "agent text")
+            self.assertIn("error", redirected)
+            self.assertEqual(
+                before,
+                (self.vault / "People" / "Self.md").read_bytes(),
+                "a junction turned reject into a second writer of Self.md",
+            )
 
     def test_reject_cannot_append_to_a_file_the_gate_did_not_render(self):
         api = self.api()
@@ -2626,13 +2591,19 @@ class GateBoundaryTests(TempVaultCase):
     def test_init_pins_the_hook_interpreter(self):
         """A bare `python` in hooks.json resolves through PATH, which the vault shares."""
         import json as _json
+        import shlex
 
         hooks = _json.loads(
             (self.vault / ".cursor" / "hooks.json").read_text(encoding="utf-8")
         )
-        command = hooks["hooks"]["sessionStart"][0]["command"]
-        self.assertNotIn("python .cursor", command)
-        self.assertEqual(hooks["hooks"]["sessionEnd"][0]["command"].count("python "), 0)
+        for event in ("sessionStart", "sessionEnd"):
+            with self.subTest(event=event):
+                command = hooks["hooks"][event][0]["command"]
+                executable = shlex.split(command, posix=os.name != "nt")[0]
+                if os.name == "nt":
+                    executable = executable.strip('"')
+                self.assertTrue(Path(executable).is_absolute(), command)
+                self.assertEqual(executable, sys.executable, command)
 
     def test_generated_mcp_config_never_contains_the_gate_key(self):
         import json as _json
