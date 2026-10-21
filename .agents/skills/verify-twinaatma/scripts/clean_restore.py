@@ -73,6 +73,13 @@ TOOLS = ("memory_session_start", "memory_search", "memory_get_note", "memory_rel
 TOOLING = {"tool-create-venv", "tool-install", "tool-import-origin"}
 DERIVED = ("knowledge_index.db", ".knowledgeos/", ".codex/")
 SECRET_NAME = re.compile(r"(?i)token|secret|password|credential|api[_-]?key|_key$|^actions_|^openai|^anthropic")
+# The owner's device-local policy (21 October 2026): another device refuses the old proposal with a hint to propose again.
+# A bare mention of the signing key is a cause, not an instruction, so these two patterns require an instruction.
+PROPOSE_AGAIN = re.compile(r"(?i)\b(?:re-?propos\w*|propose (?:it |this |that |the change )?again|(?:ask for |create |make )(?:a )?new proposal)\b")
+ACTION = re.compile(r"(?i)\b(?:restore|back ?up|re-?propos\w*|propose (?:it |this |that |the change )?again|(?:ask for |create |make )(?:a )?new proposal|copy (?:the|your))\b")
+OTHER_DEVICE_CAUSE = re.compile(
+    r"(?i)(?:signing|gate|approval)[ -]?(?:key|state)[^\n]*\b(?:other|another|different|new) (?:device|machine|computer|install)\b"
+    r"|\b(?:other|another|different) (?:device|machine|computer|install)\b[^\n]*(?:signing|gate|approval)[ -]?(?:key|state)")
 CONSOLE_DEADLINE = 60
 HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 
@@ -156,6 +163,12 @@ def finished(record, *, console=False):
 def command_ok(ev, label):
     record = ev.command(label)
     return finished(record) and record.get("exit_code") == 0
+
+
+def ran_to_completion(ev, label):
+    """Doctor exits 1 when it reports an error, such as a stale Cursor hook path. It still ran and printed its findings."""
+    record = ev.command(label)
+    return finished(record) and record.get("exit_code") in (0, 1)
 
 
 # --------------------------------------------------------------------------- #
@@ -330,9 +343,9 @@ def case_dependency(a, b, facts):
     text = "\n".join(parts.values())
     searchable = "\n".join(re.sub(r"\([^)]*\)", "", wording(line)) for line in text.splitlines() if not line.strip().startswith("Key:"))
     observed = {
-        "doctor_finished": command_ok(b, "doctor-1"),
-        "cause_named": ss.CAUSE.search(searchable) is not None,
-        "action_named": ss.RECOVERY.search(searchable) is not None,
+        "doctor_finished": ran_to_completion(b, "doctor-1"),
+        "cause_named": ss.CAUSE.search(searchable) is not None or OTHER_DEVICE_CAUSE.search(searchable) is not None,
+        "action_named": ACTION.search(searchable) is not None,
         "doctor_stdout": parts["doctor-1.stdout"],
     }
     return observed["doctor_finished"] and observed["cause_named"] and observed["action_named"], observed
@@ -345,7 +358,7 @@ def case_refused(a, b, facts):
     record, stderr = b.command("approve-lost"), b.stderr("approve-lost")
     refusal = {"finished_by_itself": finished(record, console=True) and record.get("exit_code") == 1, "exit_code": record.get("exit_code"),
                "timed_out": bool(record.get("timed_out")), "stderr": stderr, "no_traceback": bool(stderr.strip()) and "Traceback" not in stderr,
-               "explained": bool(ss.EXPLAINED.search(wording(stderr))), "recovery_hint": bool(ss.RECOVERY.search(wording(stderr))),
+               "explained": bool(ss.EXPLAINED.search(wording(stderr))), "recovery_hint": bool(PROPOSE_AGAIN.search(wording(stderr))),
                "no_prompt_shown": "[y/N]" not in stderr and "Apply this" not in stderr}
     s0, s2 = b.snap(0), b.snap(2)
     pending = b.stdout("pending-1")
@@ -805,6 +818,10 @@ def run_restore(kind, manifest, out, origin_root, vault_zip, state_zip):
     except (OSError, ValueError):
         origin_result = {"error": "origin result is missing"}
     plan_ok = frozen_before_calls(origin_dir) and frozen_before_calls(device.directory)
+    try:
+        findings = observe_restore(origin_dir, device.directory, device.vault)
+    except (OSError, ValueError, KeyError) as caught:
+        findings = {"error": type(caught).__name__ + ": " + str(caught)}
     complete = [row["id"] for row in cases] == list(CASE_IDS)
     passed = (error is None and complete and all(row["verdict"] == "PASS" for row in cases) and stopped
               and origin_result.get("error") is None and origin_result.get("all_started_processes_stopped") is True and plan_ok)
@@ -816,6 +833,7 @@ def run_restore(kind, manifest, out, origin_root, vault_zip, state_zip):
         "verdict": "PASS" if passed else "FAIL", "origin_error": origin_result.get("error"),
         "origin_processes_stopped": origin_result.get("all_started_processes_stopped"),
         "restore_processes_stopped": stopped, "frozen_before_first_command": plan_ok, "product_hashes": device.sources,
+        "observations": findings,
         "error": None if error is None else type(error).__name__ + ": " + str(error),
         "limits": ["Windows runners only; the approval prompt is never answered; no Codex application, model chat or credential is used",
                    "Validity is observed at describe time through listings, pending and doctor, never by applying a proposal"]}
@@ -823,6 +841,26 @@ def run_restore(kind, manifest, out, origin_root, vault_zip, state_zip):
     print(json.dumps({"report": str(device.directory / "report.json"), "verdict": report["verdict"],
                       "passed": sum(row["verdict"] == "PASS" for row in cases), "total": len(CASE_IDS)}), flush=True)
     return 0  # the verdict is data in report.json; a failed case does not make the run itself fail
+
+
+def observe_restore(origin_dir, directory, vault):
+    """Findings that are not part of any frozen case: they are reported, never graded."""
+    a, b = Ev(origin_dir), Ev(directory)
+    old_vault, old_exe = a.json("paths.json")["vault"], a.json("install.json")["executable"]
+    needles = {old_vault, old_vault.replace("\\", "\\\\"), old_exe, old_exe.replace("\\", "\\\\")}
+    stale = []
+    for relative in sorted(content(inventory(vault))):
+        path = Path(vault) / relative
+        try:
+            text = path.read_text(encoding="utf-8") if path.stat().st_size < 200000 else ""
+        except (OSError, UnicodeError):
+            continue
+        if any(needle in text for needle in needles):
+            stale.append(relative)
+    errors = {label: [line.strip() for line in b.stdout(label).splitlines() if "[ERROR]" in line] for label in ("doctor-1", "doctor-2")}
+    return {"doctor_exit_codes": {label: b.command(label).get("exit_code") for label in ("doctor-1", "doctor-2")},
+            "doctor_error_lines": errors, "vault_files_still_naming_device_a_paths": stale,
+            "note": "Reported, not graded: init writes Cursor files with absolute device paths, and they stay stale after a restore"}
 
 
 def frozen_before_calls(directory):
@@ -872,6 +910,7 @@ def build_bundle(restore_root, origin_root, output):
                        "origin_processes_stopped": report.get("origin_processes_stopped") is True,
                        "restore_processes_stopped": report.get("restore_processes_stopped") is True,
                        "origin_error": report.get("origin_error"), "error": report.get("error"),
+                       "observations": report.get("observations"),
                        "report_sha256": sha(directory / "report.json"), "devices": info,
                        "install": {role: json.loads((folder / "install.json").read_text(encoding="utf-8")) for role, folder in (("origin", origin), ("restore", directory))
                                    if (folder / "install.json").is_file()}}
