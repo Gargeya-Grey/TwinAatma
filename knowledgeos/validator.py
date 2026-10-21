@@ -84,6 +84,11 @@ def validate_vault(vault: Path | str) -> dict[str, Any]:
         if _is_conflict_copy(path):
             continue
         rel = path.relative_to(vault).as_posix()
+        # The README.md at the vault root is the guide file the starter kit wrote for the
+        # person, not a note (the previous revision shipped one with no frontmatter). A
+        # README inside a note folder is still a note.
+        if rel == "README.md":
+            continue
         notes.append(rel)
         text = path.read_text(encoding="utf-8", errors="replace")
         fm, body = split_frontmatter(text)

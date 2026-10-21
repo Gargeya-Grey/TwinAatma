@@ -364,7 +364,10 @@ def _self_approve(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 2
-    if not sys.stdin.isatty():
+    from knowledgeos.gate import is_real_console
+
+    # `isatty()` is true for the NUL device on Windows; the stream must be a real console.
+    if not is_real_console(sys.stdin):
         print(
             "Refusing to approve without an interactive terminal.\n"
             "Run this command yourself in a terminal window.",

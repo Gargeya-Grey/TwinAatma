@@ -33,3 +33,10 @@ Preconditions: use a fresh task-owned directory, the exact artifact under review
 ## Gotchas
 
 Doctor checks local files and index health. Current generated MCP configurations bind the full vault ID, omit a fixed working directory and retain an absolute fallback. A matching vault in the host working-directory ancestry takes precedence; an unrelated fallback or conflicting visible copies refuse. Markerless legacy launchers keep their previous absolute semantics. Cursor hooks still contain absolute paths and need separate relocation evidence. Pending approvals depend on off-vault signing state. A Windows MCP move does not establish other-host hooks, clean-device restore or approval-state transfer.
+
+## Journey fixes (21 October 2026)
+
+- Doctor says in plain words when ledger rows were signed by a different key (key lost or replaced, or a ledger from another device or install), that those proposals cannot be approved here, and how to recover; it no longer prints the healthy "signed" line when no row verifies.
+- Doctor prints the installed version, the vault's declared schema and a compatibility verdict; `vault_version_check` orders a dev build before its release and returns None for a compatible vault.
+- `twinaatma validate` does not treat the vault-root `README.md` as a note (a README inside a note folder still is).
+- Doctor warns, on every device, about sync conflict copies (Syncthing, Dropbox, Nextcloud names) and notes that share an `id:`; it never renames, merges or rewrites either copy.
