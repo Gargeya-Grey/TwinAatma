@@ -73,9 +73,6 @@ jobs:
       - name: Identity writers (native POSIX, in-job freeze of this commit)
         continue-on-error: true
         run: |
-          # The repository stores scripts/*.sh as mode 100644, and capture.sh runs rebuild_index.sh directly.
-          # The laptop sees them as executable; give the runner the same state. File content is unchanged.
-          chmod +x scripts/*.sh
           python -B "$SCRIPTS/ci_graded.py" freeze --output "$EVIDENCE/freeze/freeze.json"
           python -B "$SCRIPTS/identity_writers.py" --freeze "$EVIDENCE/freeze/freeze.json" --output "$EVIDENCE/writers"
       - name: Grade natively and write the bundle
