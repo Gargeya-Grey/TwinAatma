@@ -26,6 +26,7 @@ from support import ROOT, TempVaultCase
 RECOVERY = re.compile(r"(?i)\b(?:restore|backup|re-?propos\w*|propose (?:it )?again|new proposal|create a new|signing key|key file|recover\w*)\b")
 PROPOSE_AGAIN = re.compile(r"propos\w*[^.\n]{0,40}\bagain\b|\bagain\b[^.\n]{0,40}propos|new proposal", re.I)
 OTHER_DEVICE = re.compile(r"\b(another|different|other)\b[^.\n]{0,24}\b(device|install|machine|computer)\b", re.I)
+STATE_MISSING = re.compile(r"(?:signing|gate|approval)[ -]?(?:key|state)[^\n]*\b(?:missing|lost|absent|not found)\b", re.I)
 
 NOTE = (
     "---\ntype: project\ntitle: {title}\ndescription: Synthetic note\nstatus: active\n"
@@ -166,6 +167,20 @@ class DoctorLedgerTests(TempVaultCase):
         self.assertRegex(text, r"(?i)cannot be approved here")
         self.assertRegex(text, r"(?i)restore the signing key backup, or propose")
         self.assertNotIn("[OK] Proposal ledger is signed", text)
+
+    def test_doctor_names_the_missing_signing_state_on_a_new_device(self):
+        api = self.api()
+        api.propose_self_update("One", "heuristics", "* Prefer evidence one.", mode="append")
+        fresh = self.root / "new-device-state"
+        fresh.mkdir()
+        with mock.patch.dict(os.environ, {"KNOWLEDGEOS_STATE_DIR": str(fresh)}):
+            _, text = run_doctor(self.vault)
+        self.assertRegex(text, r"1 Self proposal file\(s\) are not in the ledger")
+        self.assertIsNotNone(STATE_MISSING.search(text), text)
+        self.assertIsNotNone(OTHER_DEVICE.search(text), text)
+        self.assertRegex(text, r"(?i)restore the signing-state backup")
+        self.assertIsNotNone(PROPOSE_AGAIN.search(text), text)
+        self.assertNotRegex(text, r"(?i)failed signature")
 
     def test_doctor_stays_quiet_about_the_key_when_every_row_verifies(self):
         api = self.api()

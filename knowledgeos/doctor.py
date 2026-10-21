@@ -454,6 +454,14 @@ def run_doctor(vault: Path) -> int:
             )
             for path in orphans:
                 print(f"            {path}")
+            print(
+                "            This install has no signing record for them: they came from another device, "
+                "an older version, or a signing state that is missing here."
+            )
+            print(
+                "            To approve them here, restore the signing-state backup of the install that "
+                "made them. Otherwise propose them again on this device."
+            )
         if health["rejected_rows"]:
             print(
                 f"  [WARNING] {health['rejected_rows']} ledger row(s) failed signature "
