@@ -204,7 +204,7 @@ class IdentityScoreTests(ObservationFixtures, unittest.TestCase):
         outcomes = {item["id"] for item in metric.read_json(metric.RUBRIC)["outcomes"] if metric.outcome(item, reports)["verdict"] == "PASS"}
         self.assertEqual(outcomes, {"IDENTITY.unknown_stays_unknown", "IDENTITY.canonical_sections"})
         self.assertEqual(metric.sha(metric.RUBRIC), "744e4913702f6fdf344f233491f019737aa1a2d5adf65edf7ab1c48fce98aa91")
-        self.assertEqual(metric.ADAPTER_REQUIREMENTS["version"], "verify-twinaatma.adapters/v12")
+        self.assertEqual(metric.ADAPTER_REQUIREMENTS["version"], "verify-twinaatma.adapters/v13")
 
     def test_partial_duplicate_unknown_or_manual_identity_cases_cannot_earn_credit(self):
         for change in (lambda d: d["cases"].pop(), lambda d: d["cases"].append(copy.deepcopy(d["cases"][0])),

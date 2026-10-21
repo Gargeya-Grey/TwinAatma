@@ -28,7 +28,7 @@ class LearningViews(unittest.TestCase):
     def test_literal_registry_and_fixed54_contract(self):
         self.assertEqual(len(metric.LEARNING_IDS), 12)
         self.assertEqual(metric.LEARNING_IDS[1], 'learning.exact_project_filter')
-        self.assertEqual(metric.ADAPTER_REQUIREMENTS['version'], 'verify-twinaatma.adapters/v12')
+        self.assertEqual(metric.ADAPTER_REQUIREMENTS['version'], 'verify-twinaatma.adapters/v13')
         rubric = metric.read_json(metric.RUBRIC)
         self.assertEqual(len(rubric['outcomes']), 54)
         self.assertEqual(metric.sha(metric.RUBRIC), '744e4913702f6fdf344f233491f019737aa1a2d5adf65edf7ab1c48fce98aa91')

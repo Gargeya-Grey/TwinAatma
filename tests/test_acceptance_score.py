@@ -507,7 +507,7 @@ class AcceptanceScoreTests(unittest.TestCase):
         self.assertEqual(full["outcomes"]["SETUP.artifact_install"]["verdict"], "PASS")
         self.assertEqual(full["outcomes"]["SETUP.host_discovery"]["verdict"], "NOT CHECKED")
         self.assertEqual(full["denominator"], 54)
-        self.assertEqual(full["adapter_requirements"]["version"], "verify-twinaatma.adapters/v12")
+        self.assertEqual(full["adapter_requirements"]["version"], "verify-twinaatma.adapters/v13")
         self.assertEqual(self.metric.RUBRIC.read_bytes(), rubric_bytes)
 
     def test_artifact_missing_observation_and_unknown_platform_fail_closed(self):

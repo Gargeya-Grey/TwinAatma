@@ -119,7 +119,7 @@ class DataScoreTests(unittest.TestCase):
         self.assertEqual(result["counts"]["PASS"], 3)
         self.assertEqual(result["denominator"], 54)
         self.assertEqual(result["readiness_verdict"], "NOT ACCEPTED")
-        self.assertEqual(result["adapter_requirements"]["version"], "verify-twinaatma.adapters/v12")
+        self.assertEqual(result["adapter_requirements"]["version"], "verify-twinaatma.adapters/v13")
         self.assertTrue(all(result["outcomes"][name]["verdict"] == "NOT CHECKED" for name in
                             ("SETUP.artifact_install", "SETUP.host_discovery", "IDENTITY.owner_exact_approval")))
 

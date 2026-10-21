@@ -2784,6 +2784,47 @@ ADAPTER_REQUIREMENTS['identity_writers_producer'] = {
 }
 
 
+# Each extension grades one producer in its own module, so a new proof never edits this file.
+# A module exposes grade(api, paths, current) -> [normalized report]; it may award only the
+# check IDs declared here, and only in the declared scope.
+EXTENSION_ADAPTERS = {
+    'integrity': {'module': 'integrity_adapter', 'scope': 'source',
+                  'outcomes': {'IDENTITY.integrity_refusal': ['identity.integrity.complete']}},
+    'signing-state': {'module': 'signing_state_adapter', 'scope': 'artifact',
+                      'outcomes': {'PORT.missing_signing_state': ['port.missing_signing_state']}},
+    'resource-budget': {'module': 'resource_budget_adapter', 'scope': 'performance',
+                        'outcomes': {'PORT.measured_resource_budget': ['port.resource_budget']}},
+    'clean-restore': {'module': 'clean_restore_adapter', 'scope': 'clean_device',
+                      'outcomes': {'PORT.clean_device_restore': ['port.clean_device_restore']}},
+}
+for _spec in EXTENSION_ADAPTERS.values():
+    ADAPTER_REQUIREMENTS['outcomes'].update(_spec['outcomes'])
+ADAPTER_REQUIREMENTS['extensions'] = {
+    name: {'module': spec['module'] + '.py', 'scope': spec['scope'], 'outcomes': spec['outcomes'],
+           'module_sha256': sha(Path(__file__).with_name(spec['module'] + '.py'))
+           if Path(__file__).with_name(spec['module'] + '.py').is_file() else None}
+    for name, spec in EXTENSION_ADAPTERS.items()}
+ADAPTER_REQUIREMENTS['version'] = 'verify-twinaatma.adapters/v13'
+
+
+def extension_reports(name, paths, current):
+    spec = EXTENSION_ADAPTERS.get(name)
+    if spec is None:
+        raise ValueError('Unknown extension adapter: ' + name)
+    if ADAPTER_REQUIREMENTS['extensions'][name]['module_sha256'] is None:
+        raise ValueError('Extension adapter module is missing: ' + spec['module'])
+    import importlib
+    reports = importlib.import_module(spec['module']).grade(sys.modules[__name__], list(paths), current)
+    allowed = {check for checks in spec['outcomes'].values() for check in checks}
+    for report in reports:
+        checks = report.get('checks')
+        if (report.get('scope') != spec['scope'] or not isinstance(checks, dict) or not set(checks) <= allowed
+                or any(not isinstance(row, dict) or row.get('id') != key or row.get('verdict') not in STATUSES
+                       for key, row in checks.items())):
+            raise ValueError('Extension adapter ' + name + ' returned an out-of-scope or malformed report')
+    return reports
+
+
 def outcome(item, reports):
     requirements = item["checks"] or ADAPTER_REQUIREMENTS["outcomes"].get(item["id"], [])
     scoped = [r for r in reports if r["scope"] == item["required_scope"]]
@@ -2827,7 +2868,7 @@ def validate_baseline(baseline, rubric, rubric_hash):
 
 
 def snapshot(source_paths, host_paths, baseline=None, *, artifact_paths=None, runtime_hook_paths=None, data_paths=None,
-             identity_paths=None, quality_paths=None, graph_paths=None, recovery_paths=None, learning_paths=None, privacy_paths=None, longitudinal_paths=None, advanced_host_paths=None, native_rendezvous=None, writers_paths=None, installed_move_paths=None, installed_move_rendezvous=None):
+             identity_paths=None, quality_paths=None, graph_paths=None, recovery_paths=None, learning_paths=None, privacy_paths=None, longitudinal_paths=None, advanced_host_paths=None, native_rendezvous=None, writers_paths=None, installed_move_paths=None, installed_move_rendezvous=None, extension_paths=None):
     rubric = read_json(RUBRIC)
     items = rubric["outcomes"]
     if len(items) != 54 or rubric.get("denominator") != 54 or len({i["id"] for i in items}) != 54:
@@ -2862,6 +2903,8 @@ def snapshot(source_paths, host_paths, baseline=None, *, artifact_paths=None, ru
         reports.append(bundle(writers_paths, data_paths=data_paths or (), source_paths=source_paths or (),
                               recovery_paths=recovery_paths or (), learning_paths=learning_paths or (),
                               base=sys.modules[__name__], current=current))
+    for name, paths in (extension_paths or {}).items():
+        reports += extension_reports(name, paths, current)
     outcomes = {item["id"]: outcome(item, reports) for item in items}
     counts = {status: sum(row["verdict"] == status for row in outcomes.values()) for status in STATUSES}
     passed = counts["PASS"]
@@ -2911,13 +2954,21 @@ def main():
     parser.add_argument("--identity-writers-report", type=Path, action="append", default=[])
     parser.add_argument("--installed-move-report", type=Path, action="append", default=[])
     parser.add_argument("--installed-move-native-rendezvous", type=Path)
+    parser.add_argument("--extension-report", action="append", default=[], metavar="NAME=PATH",
+                        help="Report for one extension adapter: " + ", ".join(EXTENSION_ADAPTERS))
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.output.exists():
             raise ValueError("Output already exists; preserve snapshots and choose a fresh path")
-        result = snapshot([p.resolve() for p in args.source_report], [p.resolve() for p in args.host_report], args.baseline, artifact_paths=[p.resolve() for p in args.artifact_report], runtime_hook_paths=[p.resolve() for p in args.runtime_hook_report], data_paths=[p.absolute() for p in args.data_report], identity_paths=[p.absolute() for p in args.identity_report], quality_paths=[p.absolute() for p in args.quality_report], graph_paths=[p.absolute() for p in args.graph_report], recovery_paths=[p.absolute() for p in args.recovery_report], learning_paths=[p.absolute() for p in args.learning_report], privacy_paths=[p.absolute() for p in args.privacy_report], longitudinal_paths=[p.absolute() for p in args.longitudinal_report], advanced_host_paths=[p.absolute() for p in args.advanced_host_report], native_rendezvous=args.advanced_native_rendezvous, writers_paths=[p.absolute() for p in args.identity_writers_report], installed_move_paths=[p.absolute() for p in args.installed_move_report], installed_move_rendezvous=args.installed_move_native_rendezvous)
+        extension_paths = {}
+        for value in args.extension_report:
+            name, separator, path = value.partition("=")
+            if not separator or not path:
+                raise ValueError("Extension report must be NAME=PATH")
+            extension_paths.setdefault(name, []).append(Path(path).absolute())
+        result = snapshot([p.resolve() for p in args.source_report], [p.resolve() for p in args.host_report], args.baseline, artifact_paths=[p.resolve() for p in args.artifact_report], runtime_hook_paths=[p.resolve() for p in args.runtime_hook_report], data_paths=[p.absolute() for p in args.data_report], identity_paths=[p.absolute() for p in args.identity_report], quality_paths=[p.absolute() for p in args.quality_report], graph_paths=[p.absolute() for p in args.graph_report], recovery_paths=[p.absolute() for p in args.recovery_report], learning_paths=[p.absolute() for p in args.learning_report], privacy_paths=[p.absolute() for p in args.privacy_report], longitudinal_paths=[p.absolute() for p in args.longitudinal_report], advanced_host_paths=[p.absolute() for p in args.advanced_host_report], native_rendezvous=args.advanced_native_rendezvous, writers_paths=[p.absolute() for p in args.identity_writers_report], installed_move_paths=[p.absolute() for p in args.installed_move_report], installed_move_rendezvous=args.installed_move_native_rendezvous, extension_paths=extension_paths)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as stream:
             json.dump(result, stream, indent=2, ensure_ascii=False)

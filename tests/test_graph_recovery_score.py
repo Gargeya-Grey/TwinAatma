@@ -38,7 +38,7 @@ class GraphMeaningControls(unittest.TestCase):
         rubric = metric.read_json(metric.RUBRIC)
         self.assertEqual(len(rubric['outcomes']), 54)
         self.assertEqual(metric.sha(metric.RUBRIC), '744e4913702f6fdf344f233491f019737aa1a2d5adf65edf7ab1c48fce98aa91')
-        self.assertEqual(metric.ADAPTER_REQUIREMENTS['version'], 'verify-twinaatma.adapters/v12')
+        self.assertEqual(metric.ADAPTER_REQUIREMENTS['version'], 'verify-twinaatma.adapters/v13')
         self.assertEqual(metric.ADAPTER_REQUIREMENTS['outcomes']['RECOVERY.ownership_locks'],
                          ['recovery.locks.complete', 'recovery.write-faults.complete'])
         self.assertNotIn('verify-twinaatma.generated-writers/v1', metric.ALL_DATA_PRODUCERS)

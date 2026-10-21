@@ -4,6 +4,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -66,7 +67,9 @@ def _literal(name):
 def native_link_target(path):
     path = Path(path)
     if path.is_symlink():
-        return str(path.readlink())
+        target = str(path.readlink())
+        # Windows reports native symlink targets in the extended-length form.
+        return target[4:] if os.name == 'nt' and target.startswith('\\\\?\\') else target
     info = path.lstat()
     if getattr(info, 'st_reparse_tag', None) != 0xA000001D:
         raise ValueError('Privacy retained native link is missing or has an unsupported tag')

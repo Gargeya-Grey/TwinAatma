@@ -231,8 +231,8 @@ class PrivacyRun:
         self.save('private-inputs.json', self.private, redact=False)
         (self.directory / 'child-traces').mkdir()
         (self.directory / 'audit').mkdir()
-        (self.directory / 'audit/sitecustomize.py').write_text(AUDIT_SOURCE, encoding='utf-8')
-        (self.directory / 'fixture_ops.py').write_text(HELPER_SOURCE, encoding='utf-8')
+        (self.directory / 'audit/sitecustomize.py').write_bytes(AUDIT_SOURCE.encode('utf-8'))
+        (self.directory / 'fixture_ops.py').write_bytes(HELPER_SOURCE.encode('utf-8'))
         self.processes, self.cases, self.active = [], [], []
         self.evidence = set()
         self.saved_sources = {}

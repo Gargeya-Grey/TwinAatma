@@ -150,7 +150,7 @@ class MaintenanceScoreTests(unittest.TestCase):
         return metric.data_report(path, self.current)
 
     def test_fixed_registry_adds_only_the_three_existing_source_outcomes(self):
-        self.assertEqual(metric.ADAPTER_REQUIREMENTS["version"], "verify-twinaatma.adapters/v12")
+        self.assertEqual(metric.ADAPTER_REQUIREMENTS["version"], "verify-twinaatma.adapters/v13")
         self.assertEqual({spec["outcome"] for spec in metric.MAINTENANCE_PRODUCERS.values()},
                          {"DATA.safe_maintenance", "DATA.preserve_hooks", "DATA.honest_validation"})
         for journey, producer in PRODUCERS.items():
