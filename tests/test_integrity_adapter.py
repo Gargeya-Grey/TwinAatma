@@ -26,8 +26,10 @@ api = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = api
 spec.loader.exec_module(api)
 
-PASSING = 19
+# The case the product once failed by reaching the approval prompt. The controls make it fail
+# again from changed evidence, so they hold whether the retained report passes or fails.
 FAILING_CASE = 'replay_rejected_restored'
+PROMPT_SHOWN = b'Proposal: x.md\nApply this to People/Self.md? [y/N] '
 
 
 def retained_report():
@@ -90,27 +92,57 @@ class IntegrityAdapterControls(unittest.TestCase):
         read, exists = self.reader(overrides)
         return grader.judge_case(name, self.expected[name], read, exists)
 
+    def reported(self):
+        return {name: next(row['verdict'] for row in self.data['cases'] if row['id'].endswith('.' + name))
+                for name in self.expected}
+
+    def reached_prompt(self, name):
+        """Evidence bytes for an approval that waited at the prompt and showed the preview."""
+        label = name + '.approve'
+        record = json.loads((self.directory / (label + '.command.json')).read_text(encoding='utf-8'))
+        return {label + '.command.json': json.dumps(dict(record, timed_out=True, killed=True)).encode(),
+                label + '.console.txt': PROMPT_SHOWN}
+
+    def retain_failure(self, name, report_it):
+        """Write the prompt-reaching evidence into the control copy and keep its hashes truthful."""
+        for file, data in self.reached_prompt(name).items():
+            self.rewrite(file, lambda _old, data=data: data)
+        if report_it:
+            for row in self.data['cases']:
+                if row['id'].endswith('.' + name):
+                    row['verdict'] = 'FAIL'
+            self.data['verdict'] = 'FAIL'
+            self.save()
+
     # ----- the truthful result -------------------------------------------------------------
 
-    def test_truthful_fail_survives_with_the_real_defect_named(self):
+    def test_truthful_result_survives_regrading(self):
         report = self.grade()[0]
         row = report['checks']['identity.integrity.complete']
-        self.assertEqual((report['scope'], row['verdict']), ('source', 'FAIL'))
-        self.assertEqual(row['observed'][FAILING_CASE], 'FAIL')
-        self.assertEqual(sum(value == 'PASS' for value in row['observed'].values()), PASSING)
+        self.assertEqual((report['scope'], row['verdict']), ('source', self.data['verdict']))
+        self.assertEqual(row['observed'], self.reported())
         self.assertEqual(set(row['observed']), set(self.expected))
         self.assertTrue(all(row['evidence'][name] for name in self.expected))
 
-    def test_scorer_awards_nothing_to_a_truthful_fail(self):
+    def test_scorer_follows_the_regraded_verdict_and_awards_nothing_to_a_fail(self):
+        score = api.snapshot([], [], extension_paths={'integrity': [self.report]})
+        verdict = self.data['verdict']
+        self.assertEqual(score['outcomes']['IDENTITY.integrity_refusal']['verdict'], verdict)
+        self.assertEqual(score['counts']['PASS'], int(verdict == 'PASS'))
+        self.retain_failure(FAILING_CASE, report_it=True)
+        row = self.grade()[0]['checks']['identity.integrity.complete']
+        self.assertEqual((row['verdict'], row['observed'][FAILING_CASE]), ('FAIL', 'FAIL'))
         score = api.snapshot([], [], extension_paths={'integrity': [self.report]})
         self.assertEqual(score['outcomes']['IDENTITY.integrity_refusal']['verdict'], 'FAIL')
         self.assertEqual(score['counts']['PASS'], 0)
 
     def test_every_case_is_recomputed_from_bytes_in_both_directions(self):
+        reported = self.reported()
         for name in self.expected:
             judged = self.judge(name)
-            self.assertEqual(judged['verdict'], 'FAIL' if name == FAILING_CASE else 'PASS', (name, judged['problems']))
-        failing = self.judge(FAILING_CASE)
+            self.assertEqual(judged['verdict'], reported[name], (name, judged['problems']))
+        failing = self.judge(FAILING_CASE, self.reached_prompt(FAILING_CASE))
+        self.assertEqual(failing['verdict'], 'FAIL')
         self.assertIn(FAILING_CASE + '.approve:never_waited_at_prompt', failing['problems'])
         self.assertIn(FAILING_CASE + '.approve:no_prompt_or_preview_shown', failing['problems'])
 
@@ -123,8 +155,9 @@ class IntegrityAdapterControls(unittest.TestCase):
         self.assertEqual(row['verdict'], 'PASS')
 
     def test_a_reported_pass_that_the_evidence_contradicts_is_refused(self):
+        self.retain_failure(FAILING_CASE, report_it=False)
         for row in self.data['cases']:
-            if row['id'].endswith(FAILING_CASE):
+            if row['id'].endswith('.' + FAILING_CASE):
                 row['verdict'] = 'PASS'
         self.data['verdict'] = 'PASS'
         self.save()

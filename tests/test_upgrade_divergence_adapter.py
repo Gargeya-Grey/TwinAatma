@@ -176,14 +176,19 @@ class UpgradeDivergenceAdapterTests(unittest.TestCase):
         self.refuses("old-revision", lambda d: d["old_wheel"].update(revision="0" * 40), "revision")
 
     def test_a_report_cannot_claim_what_its_evidence_does_not_show(self):
-        failing, passing = self.first_row("FAIL"), self.first_row("PASS")
-        self.refuses("fail-claimed-as-pass", lambda d: d["cases"][failing].update(verdict="PASS"), "contradicts")
+        # A fixed product has no failing row; FixedProductTests breaks one from its evidence instead.
+        failing = next((i for i, row in enumerate(self.original["cases"]) if row["verdict"] == "FAIL"), None)
+        passing = self.first_row("PASS")
+        if failing is not None:
+            self.refuses("fail-claimed-as-pass", lambda d: d["cases"][failing].update(verdict="PASS"), "contradicts")
         self.refuses("pass-claimed-as-fail", lambda d: d["cases"][passing].update(verdict="FAIL"), "contradicts")
-        self.refuses("observed-edited", lambda d: d["cases"][failing]["observed"].update(invented=True), "contradicts")
+        edited = passing if failing is None else failing
+        self.refuses("observed-edited", lambda d: d["cases"][edited]["observed"].update(invented=True), "contradicts")
         self.refuses("expected-edited", lambda d: d["cases"][passing].update(expected="Anything"), "contradicts")
-        self.refuses("report-verdict-raised", lambda d: d.update(verdict="PASS"), "verdict contradicts")
         if self.original["verdict"] == "PASS":
             self.refuses("report-verdict-lowered", lambda d: d.update(verdict="FAIL"), "verdict contradicts")
+        else:
+            self.refuses("report-verdict-raised", lambda d: d.update(verdict="PASS"), "verdict contradicts")
         self.refuses("call-removed", lambda d: d["calls"].pop(next(i for i, r in enumerate(d["calls"]) if r["label"] == "dv-a-init")), "contradicts|Duplicate|processes")
         self.refuses("exit-code-edited", lambda d: d["calls"][1].update(exit_code=99), "differs from its retained")
 
@@ -308,6 +313,23 @@ class FixedProductTests(unittest.TestCase):
         check = graded["checks"][grader.CHECK]
         self.assertEqual(check["verdict"], "PASS")
         self.assertEqual(check["observed"], {"cases": len(grader.CASE_IDS), "passed": len(grader.CASE_IDS), "failed": []})
+
+    def test_a_removed_hint_fails_its_case_and_cannot_be_claimed_as_a_pass(self):
+        case = "upgrade.pre_ledger_draft_refused_with_hint"
+        folder = self.workspace()
+        data = copy.deepcopy(self.original)
+        for repaired in self.failing:
+            self.repair(folder, data, repaired)
+        label = self.call(data, "up-approve")["stderr"]
+        kept = [line for line in self.read(folder, label).splitlines(keepends=True) if not grader.PROPOSE_AGAIN.search(line)]
+        self.write(folder, label, "".join(kept))
+        check = self.rebuilt(folder, data)["checks"][grader.CHECK]
+        self.assertEqual((check["verdict"], check["observed"]["failed"]), ("FAIL", [case]))
+        next(row for row in data["cases"] if row["id"] == case)["verdict"] = "PASS"
+        data["verdict"] = "PASS"
+        (folder / "report.json").write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "contradicts"):
+            grader.grade(self.api, [folder / "report.json"], self.current)
 
     def test_edited_evidence_without_a_new_hash_is_refused(self):
         folder = self.workspace()

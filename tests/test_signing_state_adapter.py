@@ -50,7 +50,7 @@ class SigningStateAdapterTests(unittest.TestCase):
         sys.modules["acceptance"] = cls.metric
         spec.loader.exec_module(cls.metric)
         cls.current = cls.metric.product_hashes()
-        SIGNING.joinpath("test-tmp").mkdir(exist_ok=True)
+        SIGNING.joinpath("test-tmp").mkdir(parents=True, exist_ok=True)
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(dir=SIGNING / "test-tmp")
