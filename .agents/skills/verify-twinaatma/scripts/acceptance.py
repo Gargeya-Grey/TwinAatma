@@ -2796,6 +2796,8 @@ EXTENSION_ADAPTERS = {
                         'outcomes': {'PORT.measured_resource_budget': ['port.resource_budget']}},
     'clean-restore': {'module': 'clean_restore_adapter', 'scope': 'clean_device',
                       'outcomes': {'PORT.clean_device_restore': ['port.clean_device_restore']}},
+    'upgrade-divergence': {'module': 'upgrade_divergence_adapter', 'scope': 'artifact',
+                           'outcomes': {'PORT.upgrade_divergence': ['port.upgrade_divergence']}},
 }
 for _spec in EXTENSION_ADAPTERS.values():
     ADAPTER_REQUIREMENTS['outcomes'].update(_spec['outcomes'])

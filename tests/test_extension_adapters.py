@@ -59,7 +59,7 @@ class ExtensionAdapterTests(unittest.TestCase):
 
     def test_declared_outcomes_without_reports_stay_unresolved(self):
         score = self.metric.snapshot([], [])
-        for outcome in ('IDENTITY.integrity_refusal', 'PORT.missing_signing_state',
+        for outcome in ('IDENTITY.integrity_refusal', 'PORT.missing_signing_state', 'PORT.upgrade_divergence',
                         'PORT.measured_resource_budget', 'PORT.clean_device_restore'):
             self.assertEqual(score['outcomes'][outcome]['verdict'], 'NOT CHECKED')
 
