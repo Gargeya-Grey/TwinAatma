@@ -1,0 +1,166 @@
+name: clean-device-restore
+
+# Clean-device restore on two fresh GitHub-hosted Windows runners: one job is device A, the next job is
+# a different fresh machine, device B. Device A builds and installs this commit, makes a synthetic vault
+# with linked notes and one signed pending identity proposal, and uploads the two backups a person
+# carries (the vault folder, and separately the off-vault signing state). Device B builds and installs the
+# same commit, restores the vault copy, follows the supported procedure (setup-host, doctor), and proves
+# content, recall, host reconnection and the explicit signing-state dependency. It grades its own evidence
+# with the producer's literal cases, writes one bundle bound to the commit, and attests it.
+# The laptop scores the bundle with `acceptance.py --extension-report clean-restore=<bundle>`
+# (see .agents/skills/verify-twinaatma/references/acceptance-scoring.md).
+# `push` on acceptance/** is deliberate: workflow_dispatch needs the file on the default branch.
+# No model is called and no credential is given to any child process.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["acceptance/**"]
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PYTHONUTF8: "1"
+  SCRIPTS: .agents/skills/verify-twinaatma/scripts
+  EVIDENCE: work/gc-artifacts/.knowledgeos/ci-restore
+  BUNDLES: work/gc-artifacts/.knowledgeos/ci-restore-bundles
+
+jobs:
+  origin:
+    name: device A (origin)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Tooling
+        run: python -m pip install --upgrade "pip<26" setuptools wheel pyinstaller
+      - name: Build the wheel and the executable
+        run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
+      - name: Device A makes the vault and the two backups
+        continue-on-error: true
+        run: |
+          MANIFEST=$(ls "$EVIDENCE"/build/build/*/build-manifest.json | head -n1)
+          python -B "$SCRIPTS/clean_restore.py" origin --build-manifest "$MANIFEST" --output "$EVIDENCE/origin"
+      - name: Upload device A evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-a-evidence
+          path: |
+            work/gc-artifacts/.knowledgeos/ci-restore/origin/wheel
+            work/gc-artifacts/.knowledgeos/ci-restore/origin/binary
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Upload the carried vault copy
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: carried-vault
+          path: work/gc-artifacts/.knowledgeos/ci-restore/origin/carry/*/vault.zip
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+      - name: Upload the carried signing state
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: carried-signing-state
+          path: work/gc-artifacts/.knowledgeos/ci-restore/origin/carry/*/signing-state.zip
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
+
+  restore:
+    name: device B (restore)
+    needs: origin
+    runs-on: windows-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Tooling
+        run: python -m pip install --upgrade "pip<26" setuptools wheel pyinstaller
+      - name: Build the wheel and the executable
+        run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
+      - name: Download device A evidence
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: device-a-evidence
+          path: work/gc-artifacts/.knowledgeos/ci-restore/origin-evidence
+      - name: Download the carried vault copy
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: carried-vault
+          path: work/gc-artifacts/.knowledgeos/ci-restore/carried/vault
+      - name: Download the carried signing state
+        uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: carried-signing-state
+          path: work/gc-artifacts/.knowledgeos/ci-restore/carried/signing-state
+      - name: Device B restores and proves
+        continue-on-error: true
+        run: |
+          MANIFEST=$(ls "$EVIDENCE"/build/build/*/build-manifest.json | head -n1)
+          python -B "$SCRIPTS/clean_restore.py" restore --build-manifest "$MANIFEST" --output "$EVIDENCE/restore" \
+            --origin-evidence "$EVIDENCE/origin-evidence" --vault-zip-dir "$EVIDENCE/carried/vault" \
+            --state-zip-dir "$EVIDENCE/carried/signing-state"
+      - name: Grade natively and write the bundle
+        run: python -B "$SCRIPTS/clean_restore.py" bundle --restore-root "$EVIDENCE/restore" --origin-root "$EVIDENCE/origin-evidence" --output "$BUNDLES/clean-restore.json"
+      - name: Summarize the verdicts
+        if: ${{ !cancelled() }}
+        run: |
+          python -B -c "import json,glob; [print(p, json.load(open(p, encoding='utf-8'))['verdict']) for p in sorted(glob.glob('$EVIDENCE/restore/*/report.json'))]" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Attest the bundle
+        id: attest
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-restore-bundles/clean-restore.json') != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: work/gc-artifacts/.knowledgeos/ci-restore-bundles/clean-restore.json
+      - name: Upload the bundle
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-restore-bundles/clean-restore.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: clean-restore-bundle
+          path: work/gc-artifacts/.knowledgeos/ci-restore-bundles/clean-restore.json
+          include-hidden-files: true
+          retention-days: 30
+      - name: Upload the attestation
+        if: ${{ !cancelled() && steps.attest.outputs.bundle-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-clean-restore
+          path: ${{ steps.attest.outputs.bundle-path }}
+          include-hidden-files: true
+          retention-days: 30
+      - name: Upload the raw evidence of device B
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-evidence-clean-restore
+          path: |
+            work/gc-artifacts/.knowledgeos/ci-restore/restore/wheel
+            work/gc-artifacts/.knowledgeos/ci-restore/restore/binary
+          include-hidden-files: true
+          retention-days: 14
+          if-no-files-found: warn
