@@ -393,7 +393,11 @@ def retained_path(value):
     prefix = "/mnt/w/AI-Projects/TwinAatma"
     windows = "W:/AI-Projects/TwinAatma/"
     normalized = value.replace("\\", "/")
-    if value.startswith(prefix + "/"):
+    # Already inside this checkout (a git worktree sits below the main checkout's path).
+    inside = normalized.casefold().startswith(ROOT.absolute().as_posix().rstrip("/").casefold() + "/")
+    if inside:
+        path = Path(value)
+    elif value.startswith(prefix + "/"):
         path = ROOT / value[len(prefix) + 1:]
     elif normalized.startswith(windows):
         path = ROOT / normalized[len(windows):]

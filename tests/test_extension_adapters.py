@@ -54,8 +54,21 @@ class ExtensionAdapterTests(unittest.TestCase):
         self.assertEqual(score['outcomes']['IDENTITY.integrity_refusal']['verdict'], 'FAIL')
 
     def test_missing_module_is_refused_not_skipped(self):
+        self.metric.EXTENSION_ADAPTERS['absent'] = {
+            'module': 'absent_extension_adapter', 'scope': 'source',
+            'outcomes': {'IDENTITY.integrity_refusal': ['identity.integrity.complete']}}
+        self.metric.ADAPTER_REQUIREMENTS['extensions']['absent'] = {'module_sha256': None}
+        self.addCleanup(self.metric.EXTENSION_ADAPTERS.pop, 'absent', None)
+        self.addCleanup(self.metric.ADAPTER_REQUIREMENTS['extensions'].pop, 'absent', None)
         with self.assertRaisesRegex(ValueError, 'module is missing'):
-            self.metric.snapshot([], [], extension_paths={'integrity': []})
+            self.metric.snapshot([], [], extension_paths={'absent': []})
+
+    def test_every_declared_extension_module_exists_or_is_pending(self):
+        pending = {'resource-budget', 'clean-restore'}
+        for name, spec in self.metric.EXTENSION_ADAPTERS.items():
+            if name in pending or name in ('fake', 'absent'):
+                continue
+            self.assertIsNotNone(self.metric.ADAPTER_REQUIREMENTS['extensions'][name]['module_sha256'], name)
 
     def test_declared_outcomes_without_reports_stay_unresolved(self):
         score = self.metric.snapshot([], [])
