@@ -55,16 +55,110 @@ def _fts_query(raw: str) -> str:
     return " AND ".join(f'"{t}"' for t in cleaned[:12])
 
 
+_CONTEXT_SCAFFOLDING = _QUESTION_STOP_WORDS | {
+    "s", "am", "as", "but", "by", "if", "then", "than", "into", "up", "out",
+    "its", "there", "some", "any", "all", "more", "most", "very", "only",
+    "each", "such", "these", "those", "their", "them", "also", "just", "so",
+}
+# Reciprocal-rank constant for merging substring hits into the bm25 order.
+_FUSION_K = 60
+_CONCEPT_INDEX: dict[str, tuple[int, ...]] | None = None
+
+
+def _fold(word: str) -> str:
+    """Casefold, and drop accents from Latin words, so "japonés" finds "japones"."""
+    word = unicodedata.normalize("NFC", word.casefold())
+    plain = "".join(ch for ch in unicodedata.normalize("NFKD", word) if not unicodedata.combining(ch))
+    return plain if plain.isascii() else word
+
+
+def _lookup_keys(word: str) -> list[str]:
+    """The word, then its regular English base forms ("dinners" -> "dinner")."""
+    key = _fold(word)
+    keys = [key]
+    if key.isascii() and " " not in key:
+        for suffix, replacement in (("ies", "y"), ("es", ""), ("s", ""), ("ing", ""),
+                                    ("ing", "e"), ("ed", ""), ("ed", "e")):
+            if key.endswith(suffix) and len(key) - len(suffix) >= 3:
+                keys.append(key[: len(key) - len(suffix)] + replacement)
+    return keys
+
+
+def _concept_index() -> dict[str, tuple[int, ...]]:
+    global _CONCEPT_INDEX
+    if _CONCEPT_INDEX is None:
+        from knowledgeos.concepts import CLUSTERS
+
+        index: dict[str, list[int]] = {}
+        for number, cluster in enumerate(CLUSTERS):
+            for entry in cluster:
+                index.setdefault(_fold(entry), []).append(number)
+        _CONCEPT_INDEX = {key: tuple(numbers) for key, numbers in index.items()}
+    return _CONCEPT_INDEX
+
+
+def _context_terms(raw: str) -> list[str]:
+    return list(dict.fromkeys(token.lower() for token in _tokens(raw)
+                              if token.lower() not in _CONTEXT_SCAFFOLDING))[:24]
+
+
+def _concept_expansions(raw: str) -> list[str]:
+    """Other words for the task's own concepts: synonyms and translations.
+
+    A note often says the same thing in other words ("dinner" and "food") or in
+    another language ("coffee" and "Kaffee"), and FTS only matches the words given.
+    """
+    from knowledgeos.concepts import CLUSTERS
+
+    index = _concept_index()
+    words = [token.lower() for token in _tokens(raw)]
+    content = [word for word in words if word not in _CONTEXT_SCAFFOLDING]
+    own = {_fold(word) for word in content}
+    clusters: list[int] = []
+    for word in content + [f"{first} {second}" for first, second in zip(words, words[1:])]:
+        for key in _lookup_keys(word):
+            if key in index:
+                clusters.extend(index[key])
+                break
+    expansions: list[str] = []
+    for number in dict.fromkeys(clusters):
+        for entry in CLUSTERS[number]:
+            if _fold(entry) not in own and entry not in expansions:
+                expansions.append(entry)
+    return expansions[:120]
+
+
+def _context_parts(raw: str) -> tuple[list[str], list[str], list[str]]:
+    """FTS clauses for the task's words, FTS clauses for expansions, substring terms.
+
+    Expansions in scripts FTS cannot segment (CJK, kana, hangul) are matched as
+    substrings, the same way `blended_search` answers such a query.
+    """
+    lexical: list[str] = []
+    for term in _context_terms(raw):
+        lexical.append(f'"{term}"')
+        # Porter stems "explain" and "explanation" differently, so a long word also
+        # matches by its first five letters.
+        if len(term) >= 6 and term.isalpha():
+            lexical.append(f'"{term[:5]}"*')
+    expansion: list[str] = []
+    substrings: list[str] = []
+    for entry in _concept_expansions(raw):
+        if _needs_substring_fallback(entry):
+            substrings.append(entry)
+        else:
+            expansion.append(f'"{entry}"')
+    return lexical, expansion, substrings[:8]
+
+
 def _context_query(raw: str) -> str:
     """Find candidate memories for a task, rather than require its every word."""
-    scaffolding = _QUESTION_STOP_WORDS | {
-        "s", "am", "as", "but", "by", "if", "then", "than", "into", "up", "out",
-        "its", "there", "some", "any", "all", "more", "most", "very", "only",
-        "each", "such", "these", "those", "their", "them", "also", "just", "so",
-    }
-    terms = dict.fromkeys(token.lower() for token in _tokens(raw)
-                          if token.lower() not in scaffolding)
-    return " OR ".join(f'"{term}"' for term in list(terms)[:24]) or '""'
+    lexical, expansion, _substrings = _context_parts(raw)
+    return " OR ".join(lexical + expansion) or '""'
+
+
+def _context_substrings(raw: str) -> list[str]:
+    return _context_parts(raw)[2]
 
 
 def _like(raw: str) -> str:
@@ -93,6 +187,50 @@ def _needs_substring_fallback(query: str) -> bool:
         if 0x1F000 <= code <= 0x1FAFF:  # emoji
             return True
     return False
+
+
+def _fts_rows(conn: sqlite3.Connection, match: str, limit: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT path, title,
+               snippet(notes_fts, 2, '«', '»', '…', 16) AS snippet,
+               bm25(notes_fts) AS rank
+        FROM notes_fts
+        WHERE notes_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (match, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _context_rows(conn: sqlite3.Connection, query: str, limit: int) -> list[dict[str, Any]]:
+    """Rank a task's words and their concept expansions together, by bm25.
+
+    One query, so a rare exact word still outweighs a common expansion. Expansions in
+    scripts FTS cannot segment are found by substring; that list has no bm25 order, so
+    it is merged by reciprocal rank. Without it the order is plain bm25.
+    """
+    lexical, expansion, substrings = _context_parts(query)
+    pool = max(limit * 2, 16)
+    rows = _fts_rows(conn, " OR ".join(lexical + expansion) or '""', pool)
+    if not substrings:
+        return rows[:limit]
+    where = " OR ".join("f.body LIKE ? ESCAPE '\\' OR f.title LIKE ? ESCAPE '\\'" for _ in substrings)
+    params: list[Any] = [value for term in substrings for value in (_like(term), _like(term))]
+    found = [dict(row) for row in conn.execute(
+        f"SELECT f.path, f.title, substr(f.body, 1, 160) AS snippet, 0.0 AS rank "
+        f"FROM notes_fts f WHERE {where} LIMIT ?",
+        (*params, pool),
+    ).fetchall()]
+    fused: dict[str, dict[str, Any]] = {}
+    for ranked in (rows, found):
+        for position, row in enumerate(ranked, 1):
+            entry = fused.setdefault(row["path"], {"row": row, "score": 0.0})
+            entry["score"] += 1.0 / (_FUSION_K + position)
+    ordered = sorted(fused.values(), key=lambda entry: (-entry["score"], entry["row"]["path"]))
+    return [dict(entry["row"], rank=-entry["score"]) for entry in ordered[:limit]]
 
 
 def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool = False) -> dict[str, Any]:
@@ -155,20 +293,11 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         results["fts_error"] = str(exc)
 
     if fts_available:
-        fts_q = _context_query(query) if context else _fts_query(query)
         try:
-            rows = conn.execute(
-                """
-                SELECT path, title,
-                       snippet(notes_fts, 2, '«', '»', '…', 16) AS snippet,
-                       bm25(notes_fts) AS rank
-                FROM notes_fts
-                WHERE notes_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (fts_q, limit),
-            ).fetchall()
+            if context:
+                rows = _context_rows(conn, query, limit)
+            else:
+                rows = _fts_rows(conn, _fts_query(query), limit)
             for r in rows:
                 meta = conn.execute(
                     "SELECT type, status, entity_id FROM notes WHERE path = ?",

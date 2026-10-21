@@ -1399,9 +1399,12 @@ class _FtsMatcher:
     """
 
     def __init__(self, query: str, *, context: bool = False) -> None:
-        from knowledgeos.search import _context_query, _fts_query, _needs_substring_fallback
+        from knowledgeos.search import _context_query, _context_substrings, _fts_query, _needs_substring_fallback
 
         self.query = _context_query(query or "") if context else _fts_query(query or "")
+        # Concept expansions in CJK or kana are found by substring, so they are re-tested
+        # the same way.
+        self.expansion_substrings = _context_substrings(query or "") if context else []
         self.conn: sqlite3.Connection | None = None
         self.raw = (query or "").strip()
         # Mirror the index's own choice of matcher. For kana, CJK, hangul and emoji
@@ -1445,9 +1448,11 @@ class _FtsMatcher:
             row = self.conn.execute(
                 "SELECT count(*) FROM t WHERE t MATCH ?", (self.query,)
             ).fetchone()
-            return bool(row and row[0])
+            if row and row[0]:
+                return True
         except sqlite3.Error:
             return None
+        return any(term in (text or "") for term in self.expansion_substrings)
 
     def matches(self, text: str) -> bool:
         """True unless the note positively fails to match.
@@ -1580,6 +1585,9 @@ def _task_excerpt(body: str, task_hint: str, max_chars: int) -> tuple[str, int]:
         pass
     finally:
         matcher.close()
+    if not fragment:
+        # A concept expansion found by substring (CJK, kana) has no FTS snippet.
+        fragment = next((term for term in matcher.expansion_substrings if term in body), "")
 
     anchor = body.find(fragment) if fragment else -1
     if anchor < 0:

@@ -29,7 +29,7 @@ FILE_GROUPS = {
     "implementation": "knowledgeos/data_ops.py knowledgeos/textio.py knowledgeos/locking.py knowledgeos/vaultstate.py",
     "retired": "scripts/onboarding.py",
     "database-reader": "knowledgeos/search.py scripts/check_alignment.py scripts/refinement_report.py scripts/smoke_test.py scripts/weekly_data.py",
-    "read-only": "knowledgeos/__init__.py knowledgeos/codex_config.py knowledgeos/doctor.py knowledgeos/links.py knowledgeos/parser.py knowledgeos/py.typed knowledgeos/resources.py knowledgeos/safe_exec.py knowledgeos/schema.py knowledgeos/self_model.py knowledgeos/validator.py knowledgeos/vault.py knowledgeos/vault_resolve.py scripts/daily_capture_report.py scripts/doctor.py scripts/search.py scripts/search.sh scripts/semantic_drift.py scripts/validate_schema.py scripts/weekly_data.sh",
+    "read-only": "knowledgeos/__init__.py knowledgeos/codex_config.py knowledgeos/concepts.py knowledgeos/doctor.py knowledgeos/links.py knowledgeos/parser.py knowledgeos/py.typed knowledgeos/resources.py knowledgeos/safe_exec.py knowledgeos/schema.py knowledgeos/self_model.py knowledgeos/validator.py knowledgeos/vault.py knowledgeos/vault_resolve.py scripts/daily_capture_report.py scripts/doctor.py scripts/search.py scripts/search.sh scripts/semantic_drift.py scripts/validate_schema.py scripts/weekly_data.sh",
     "optional-external": "scripts/_notion_env.py scripts/notion_bridge.py scripts/notion_inspect.py scripts/notion_test.py scripts/publish_to_notion.py",
 }
 FILE_ROLES = {name: group for group, names in FILE_GROUPS.items() for name in names.split()}
