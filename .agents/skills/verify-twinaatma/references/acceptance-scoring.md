@@ -112,3 +112,29 @@ Adapter v11 retains the fixed 54 outcomes and adds complete native alternative-w
 
 
 Adapter v12 preserves the same 54-outcome rubric. The complete native Windows wheel and executable relocation pair maps only to `PORT.same_device_move`; partial pairs earn no credit and supplied failures remain failures. Each original report is freshly graded through the pinned Windows observer, including when the cumulative scorer runs in Linux. Separate per-report nonce channels prevent replaying cached grades. The advanced host adapter requires exact raw v2 bytes, a current product freeze, three distinct completed model chats and the new direct authorization plus single-use claim for that payload. Neither offline corruption controls nor local native tool calls earn genuine model-conversation credit. See [native installed relocation](installed-native-move.md).
+
+
+## CI-graded route: native Linux and extra CPython runtimes
+
+The laptop has Windows only, and WSL, virtual machines and containers are not used. The evidence that needs native Linux or CPython 3.9 through 3.14 is produced on GitHub-hosted runners by `.github/workflows/acceptance-evidence.yml` (trigger: `workflow_dispatch`, or a push to a branch named `acceptance/**`). Each job runs the existing producers unchanged, grades its own raw reports natively with the existing grading functions in `acceptance.py` and `identity_writers_grade.py`, and writes one bundle of the normalized report dictionaries those functions returned. The bundle also holds the commit, run ID and attempt, platform, product, scorer and adapter-requirement hashes, and the hash of every raw report. The workflow attests the bundle with `actions/attest-build-provenance` and uploads it as `ci-graded-linux` and `ci-graded-windows`; the raw reports go up as `raw-evidence-*` for audit.
+
+Import on the laptop with a repeatable flag. The scorer needs `gh`, signed in to an account with access to the repository (the importer reads a token with `gh auth token --user <repository owner>` when `GH_TOKEN` is not set, and never prints it):
+
+```powershell
+python -B .agents/skills/verify-twinaatma/scripts/acceptance.py --ci-graded <ci-graded-linux.json> --ci-graded <ci-graded-windows.json> <local Windows report arguments> --output <fresh-score.json>
+python -B .agents/skills/verify-twinaatma/scripts/ci_graded.py inspect <bundle.json>
+```
+
+The importer refuses a bundle unless all of these hold: `gh attestation verify` accepts the file for this repository and the acceptance-evidence workflow, and the signed commit, run ID and attempt equal the ones the bundle states; the commit equals the local `git rev-parse HEAD`; the product hashes, the 102 toolkit hashes, the scorer hash and the adapter-requirements hash equal the local ones; the digest of the graded rows still matches; and every row is well formed, in the platform's own matrix, with known check IDs and an artifact or source scope. Hashes are compared with CRLF folded to LF, because git checks the same commit out as LF on Linux and CRLF on this laptop; the commit equality fixes the committed content. A new commit needs a new run.
+
+Rows enter the same places the local graders feed. Artifact cells join the list before `artifact_matrix`, runtime-hook cells the list before `runtime_hook_matrix`, data and recovery rows go into the report list, and the Linux writer result goes into the writers bundle as a pre-graded platform. The writers bundle keeps every check it had: both native platforms, every writer family, recovery, learning and the tool-refusal coverage are still required. A FAIL row stays FAIL. Cells the runner could not grade are listed in the bundle and printed to stderr; they earn nothing.
+
+Which outcomes the route can complete, with the Windows rows from the laptop:
+
+- `SETUP.artifact_install`: Linux wheel and executable from the Linux bundle, Windows pair from the laptop.
+- `SETUP.runtime_hooks`: all 14 cells come from the two bundles.
+- `RECOVERY.ownership_locks`: `recovery.py --journey write-faults` from the Linux bundle, `--journey locks` from the laptop.
+- `DATA.preserve_hooks`: the complete Linux `maintenance.py --journey hooks` report. A NOT CHECKED row beside a PASS row is not a PASS, so do not supply the laptop's Windows hooks report (two NOT CHECKED symlink cases) with it.
+- `IDENTITY.all_writers_preserve`: the Linux writers result, graded on the runner against an in-job freeze of the checked-out commit, plus the Windows writers report and the data, source, recovery and learning reports from the laptop.
+
+Trust model. The route trusts a GitHub-hosted runner, the workflow file at the attested commit, and the Sigstore attestation that binds the bundle bytes to that workflow run. It adds no protection against a dishonest producer: as for local producers, hashes prove binding, not honesty. The laptop does not regrade the raw reports, because the graders need the installation the runner built. It awards nothing beyond artifact- and source-scoped check IDs. It never awards host, human or clean-device outcomes, and a bundle row with another scope or check ID is refused. A runner is a clean Linux or Windows machine of the hosted image, not the owner's device.

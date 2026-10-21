@@ -2827,7 +2827,7 @@ def validate_baseline(baseline, rubric, rubric_hash):
 
 
 def snapshot(source_paths, host_paths, baseline=None, *, artifact_paths=None, runtime_hook_paths=None, data_paths=None,
-             identity_paths=None, quality_paths=None, graph_paths=None, recovery_paths=None, learning_paths=None, privacy_paths=None, longitudinal_paths=None, advanced_host_paths=None, native_rendezvous=None, writers_paths=None, installed_move_paths=None, installed_move_rendezvous=None):
+             identity_paths=None, quality_paths=None, graph_paths=None, recovery_paths=None, learning_paths=None, privacy_paths=None, longitudinal_paths=None, advanced_host_paths=None, native_rendezvous=None, writers_paths=None, installed_move_paths=None, installed_move_rendezvous=None, ci_graded_paths=None):
     rubric = read_json(RUBRIC)
     items = rubric["outcomes"]
     if len(items) != 54 or rubric.get("denominator") != 54 or len({i["id"] for i in items}) != 54:
@@ -2835,15 +2835,20 @@ def snapshot(source_paths, host_paths, baseline=None, *, artifact_paths=None, ru
     rubric_hash = sha(RUBRIC)
     current = product_hashes()
     reports = [source_report(p, current) for p in source_paths] + [host_report(p, current) for p in host_paths]
-    artifacts = [artifact_report(p, current) for p in (artifact_paths or [])]
+    # CI-graded route: rows graded natively on an attested GitHub runner join the local ones (ci_graded.py).
+    ci = {"artifacts": [], "hooks": [], "reports": [], "writers": {}}
+    if ci_graded_paths:
+        from ci_graded import import_bundles
+        ci = import_bundles(ci_graded_paths, sys.modules[__name__], current)
+    artifacts = [artifact_report(p, current) for p in (artifact_paths or [])] + ci["artifacts"]
     reports += artifacts
     if artifacts:
         reports.append(artifact_matrix(artifacts))
-    hooks = [runtime_hook_report(p, current) for p in (runtime_hook_paths or [])]
+    hooks = [runtime_hook_report(p, current) for p in (runtime_hook_paths or [])] + ci["hooks"]
     reports += hooks
     if hooks:
         reports.append(runtime_hook_matrix(hooks))
-    reports += [data_report(path, current) for path in (data_paths or [])]
+    reports += [data_report(path, current) for path in (data_paths or [])] + ci["reports"]
     reports += [identity_report(path, current) for path in (identity_paths or [])]
     reports += [quality_report(path, current) for path in (quality_paths or [])]
     reports += [graph_report(path, current) for path in (graph_paths or [])]
@@ -2857,11 +2862,11 @@ def snapshot(source_paths, host_paths, baseline=None, *, artifact_paths=None, ru
     reports += [{**report, 'checks': {}} for report in moves]
     if moves:
         reports.append(installed_move_matrix(moves))
-    if writers_paths:
+    if writers_paths or ci["writers"]:
         from identity_writers_grade import bundle
-        reports.append(bundle(writers_paths, data_paths=data_paths or (), source_paths=source_paths or (),
+        reports.append(bundle(writers_paths or (), data_paths=data_paths or (), source_paths=source_paths or (),
                               recovery_paths=recovery_paths or (), learning_paths=learning_paths or (),
-                              base=sys.modules[__name__], current=current))
+                              base=sys.modules[__name__], current=current, pregraded=ci["writers"]))
     outcomes = {item["id"]: outcome(item, reports) for item in items}
     counts = {status: sum(row["verdict"] == status for row in outcomes.values()) for status in STATUSES}
     passed = counts["PASS"]
@@ -2911,13 +2916,14 @@ def main():
     parser.add_argument("--identity-writers-report", type=Path, action="append", default=[])
     parser.add_argument("--installed-move-report", type=Path, action="append", default=[])
     parser.add_argument("--installed-move-native-rendezvous", type=Path)
+    parser.add_argument("--ci-graded", type=Path, action="append", default=[], help="Attested bundle graded on a GitHub runner")
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.output.exists():
             raise ValueError("Output already exists; preserve snapshots and choose a fresh path")
-        result = snapshot([p.resolve() for p in args.source_report], [p.resolve() for p in args.host_report], args.baseline, artifact_paths=[p.resolve() for p in args.artifact_report], runtime_hook_paths=[p.resolve() for p in args.runtime_hook_report], data_paths=[p.absolute() for p in args.data_report], identity_paths=[p.absolute() for p in args.identity_report], quality_paths=[p.absolute() for p in args.quality_report], graph_paths=[p.absolute() for p in args.graph_report], recovery_paths=[p.absolute() for p in args.recovery_report], learning_paths=[p.absolute() for p in args.learning_report], privacy_paths=[p.absolute() for p in args.privacy_report], longitudinal_paths=[p.absolute() for p in args.longitudinal_report], advanced_host_paths=[p.absolute() for p in args.advanced_host_report], native_rendezvous=args.advanced_native_rendezvous, writers_paths=[p.absolute() for p in args.identity_writers_report], installed_move_paths=[p.absolute() for p in args.installed_move_report], installed_move_rendezvous=args.installed_move_native_rendezvous)
+        result = snapshot([p.resolve() for p in args.source_report], [p.resolve() for p in args.host_report], args.baseline, artifact_paths=[p.resolve() for p in args.artifact_report], runtime_hook_paths=[p.resolve() for p in args.runtime_hook_report], data_paths=[p.absolute() for p in args.data_report], identity_paths=[p.absolute() for p in args.identity_report], quality_paths=[p.absolute() for p in args.quality_report], graph_paths=[p.absolute() for p in args.graph_report], recovery_paths=[p.absolute() for p in args.recovery_report], learning_paths=[p.absolute() for p in args.learning_report], privacy_paths=[p.absolute() for p in args.privacy_report], longitudinal_paths=[p.absolute() for p in args.longitudinal_report], advanced_host_paths=[p.absolute() for p in args.advanced_host_report], native_rendezvous=args.advanced_native_rendezvous, writers_paths=[p.absolute() for p in args.identity_writers_report], installed_move_paths=[p.absolute() for p in args.installed_move_report], installed_move_rendezvous=args.installed_move_native_rendezvous, ci_graded_paths=[p.absolute() for p in args.ci_graded])
         args.output.parent.mkdir(parents=True, exist_ok=True)
         with args.output.open("x", encoding="utf-8") as stream:
             json.dump(result, stream, indent=2, ensure_ascii=False)

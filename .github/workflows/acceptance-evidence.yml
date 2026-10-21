@@ -1,0 +1,178 @@
+name: acceptance-evidence
+
+# Native Linux and Windows evidence for the fixed acceptance rubric, produced on GitHub-hosted runners.
+# Each job runs the unchanged producers, grades its own raw reports natively with the unchanged graders,
+# writes one bundle, and attests it. The laptop imports the bundle with
+# `acceptance.py --ci-graded <bundle>` (see .agents/skills/verify-twinaatma/references/acceptance-scoring.md).
+# `push` on acceptance/** is deliberate: workflow_dispatch needs the file on the default branch.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["acceptance/**"]
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  SCRIPTS: .agents/skills/verify-twinaatma/scripts
+  EVIDENCE: work/gc-artifacts/.knowledgeos/ci
+  BUNDLES: work/gc-artifacts/.knowledgeos/ci-bundles
+
+jobs:
+  linux:
+    name: native Linux evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.9
+            3.10
+            3.11
+            3.12
+            3.14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Tooling
+        run: python -m pip install --upgrade pip setuptools wheel pyinstaller
+      - name: Build the wheel and the executable
+        run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
+      - name: Installed artifacts (wheel, executable)
+        continue-on-error: true
+        run: |
+          BUILD=$(ls -d "$EVIDENCE"/build/build/*/ | head -n1); BUILD=${BUILD%/}
+          WHEEL=$(ls "$BUILD"/wheel/*.whl)
+          python -B "$SCRIPTS/artifact.py" --wheel "$WHEEL" --output "$EVIDENCE/artifact-wheel" || echo "artifact wheel exited $?"
+          python -B "$SCRIPTS/artifact.py" --binary "$BUILD/dist/twinaatma/twinaatma" --build-manifest "$BUILD/build-manifest.json" --output "$EVIDENCE/artifact-binary" || echo "artifact binary exited $?"
+      - name: Generated hooks on CPython 3.9 to 3.14 and the executable
+        continue-on-error: true
+        run: |
+          BUILD=$(ls -d "$EVIDENCE"/build/build/*/ | head -n1); BUILD=${BUILD%/}
+          WHEEL=$(ls "$BUILD"/wheel/*.whl)
+          for minor in 3.9 3.10 3.11 3.12 3.13 3.14; do
+            PY=$(python -B "$SCRIPTS/ci_graded.py" interpreter "$minor")
+            python -B "$SCRIPTS/runtime_hooks.py" --python "$PY" --wheel "$WHEEL" --output "$EVIDENCE/hooks-wheel-$minor" || echo "hooks $minor exited $?"
+          done
+          python -B "$SCRIPTS/runtime_hooks.py" --binary "$BUILD/dist/twinaatma/twinaatma" --build-manifest "$BUILD/build-manifest.json" --output "$EVIDENCE/hooks-binary" || echo "hooks binary exited $?"
+      - name: Recovery partial-marker write faults (native POSIX)
+        continue-on-error: true
+        run: python -B "$SCRIPTS/recovery.py" --journey write-faults --output "$EVIDENCE/recovery-write-faults"
+      - name: Git hook preservation (native symlinks)
+        continue-on-error: true
+        run: python -B "$SCRIPTS/maintenance.py" --journey hooks --output "$EVIDENCE/maintenance-hooks"
+      - name: Identity writers (native POSIX, in-job freeze of this commit)
+        continue-on-error: true
+        run: |
+          python -B "$SCRIPTS/ci_graded.py" freeze --output "$EVIDENCE/freeze/freeze.json"
+          python -B "$SCRIPTS/identity_writers.py" --freeze "$EVIDENCE/freeze/freeze.json" --output "$EVIDENCE/writers"
+      - name: Grade natively and write the bundle
+        run: python -B "$SCRIPTS/ci_graded.py" bundle --kind Linux --reports-root "$EVIDENCE" --output "$BUNDLES/ci-graded-linux.json"
+      - name: Attest the bundle
+        id: attest
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json') != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json
+      - name: Upload the bundle
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-graded-linux
+          path: |
+            work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json
+            ${{ steps.attest.outputs.bundle-path }}
+          retention-days: 30
+      - name: Upload the raw reports and evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-evidence-linux
+          path: |
+            work/gc-artifacts/.knowledgeos/ci/**/*.json
+            work/gc-artifacts/.knowledgeos/ci/**/*.jsonl
+            work/gc-artifacts/.knowledgeos/ci/**/*.txt
+            !work/gc-artifacts/.knowledgeos/ci/**/site-packages/**
+            !work/gc-artifacts/.knowledgeos/ci/**/_internal/**
+            !work/gc-artifacts/.knowledgeos/ci/**/fixtures/**
+          retention-days: 14
+          if-no-files-found: warn
+
+  windows:
+    name: native Windows runtime hooks
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: |
+            3.9
+            3.10
+            3.11
+            3.12
+            3.14
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Tooling
+        run: python -m pip install --upgrade pip setuptools wheel pyinstaller
+      - name: Build the wheel and the executable
+        run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
+      - name: Generated hooks on CPython 3.9 to 3.14 and the executable
+        continue-on-error: true
+        run: |
+          BUILD=$(ls -d "$EVIDENCE"/build/build/*/ | head -n1); BUILD=${BUILD%/}
+          WHEEL=$(ls "$BUILD"/wheel/*.whl)
+          for minor in 3.9 3.10 3.11 3.12 3.13 3.14; do
+            PY=$(python -B "$SCRIPTS/ci_graded.py" interpreter "$minor")
+            python -B "$SCRIPTS/runtime_hooks.py" --python "$PY" --wheel "$WHEEL" --output "$EVIDENCE/hooks-wheel-$minor" || echo "hooks $minor exited $?"
+          done
+          python -B "$SCRIPTS/runtime_hooks.py" --binary "$BUILD/dist/twinaatma/twinaatma.exe" --build-manifest "$BUILD/build-manifest.json" --output "$EVIDENCE/hooks-binary" || echo "hooks binary exited $?"
+      - name: Grade natively and write the bundle
+        run: python -B "$SCRIPTS/ci_graded.py" bundle --kind Windows --reports-root "$EVIDENCE" --output "$BUNDLES/ci-graded-windows.json"
+      - name: Attest the bundle
+        id: attest
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json') != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json
+      - name: Upload the bundle
+        if: ${{ !cancelled() && hashFiles('work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-graded-windows
+          path: |
+            work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json
+            ${{ steps.attest.outputs.bundle-path }}
+          retention-days: 30
+      - name: Upload the raw reports and evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: raw-evidence-windows
+          path: |
+            work/gc-artifacts/.knowledgeos/ci/**/*.json
+            work/gc-artifacts/.knowledgeos/ci/**/*.jsonl
+            work/gc-artifacts/.knowledgeos/ci/**/*.txt
+            !work/gc-artifacts/.knowledgeos/ci/**/site-packages/**
+            !work/gc-artifacts/.knowledgeos/ci/**/Lib/**
+            !work/gc-artifacts/.knowledgeos/ci/**/_internal/**
+            !work/gc-artifacts/.knowledgeos/ci/**/fixtures/**
+          retention-days: 14
+          if-no-files-found: warn
