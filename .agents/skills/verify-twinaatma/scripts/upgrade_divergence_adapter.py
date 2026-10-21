@@ -33,7 +33,7 @@ UPGRADE_CASES = (
     "upgrade.self_unchanged",
     "upgrade.recall_works",
     "upgrade.index_rebuilds_automatically",
-    "upgrade.pending_proposal_valid_same_device",
+    "upgrade.pre_ledger_draft_refused_with_hint",
     "upgrade.doctor_passes",
     "upgrade.version_schema_reported",
     "upgrade.validate_clean",
@@ -62,7 +62,7 @@ EXPECTED = {
     "upgrade.self_unchanged": "People/Self.md keeps its exact bytes through the upgrade",
     "upgrade.recall_works": "The current product recalls the old authored note and the old capture by their literal tokens",
     "upgrade.index_rebuilds_automatically": "Ordinary memory calls rebuild the index with no human command and doctor then reports it healthy",
-    "upgrade.pending_proposal_valid_same_device": "The pending identity proposal made before the upgrade is still valid on the same device (approval reaches its prompt)",
+    "upgrade.pre_ledger_draft_refused_with_hint": "A draft written before the signed ledger existed is refused before any prompt, with a hint to propose it again; the file is kept (owner decision, 21 Oct 2026)",
     "upgrade.doctor_passes": "Doctor on the upgraded vault exits zero, reports PASSED and prints no error line",
     "upgrade.version_schema_reported": "The product reports the installed version and the vault's declared schema so compatibility is visible",
     "upgrade.validate_clean": "Validation of the vault the previous revision created reports no error and supports its declared schema",
@@ -82,6 +82,7 @@ EXPECTED = {
 }
 
 SHARED_NOTE = "Projects/Shared-Plan.md"
+PROPOSE_AGAIN = re.compile(r"propos\w*[^.\n]{0,40}\bagain\b|\bagain\b[^.\n]{0,40}propos|new proposal", re.I)
 CONFLICT_PATTERN = re.compile(r"^Projects/Shared-Plan\.sync-conflict-\d{8}-\d{6}-[A-Z0-9]{7}\.md$")
 WINNER_TOKEN = "alphaharbour"
 LOSER_TOKEN = "bravoharbour"
@@ -398,16 +399,26 @@ def p_index_rebuilds(ev):
     return passed, observed
 
 
-def p_pending_valid(ev):
+def p_pre_ledger_draft(ev):
+    """Owner decision, 21 Oct 2026: a draft from before the signed ledger stays unapprovable.
+
+    No unsigned file may reach the approval prompt, so the upgrade keeps the file and the
+    refusal tells the person to propose it again on this device.
+    """
     old = json.loads(ev.call("up-old-propose").stdout).get("proposal_path", "")
     approve = ev.call("up-approve")
-    pending = ev.call("up-pending")
     listed = ev.out("up-list-proposals")[1] or {}
+    pre, post = ev.snap("up-pre"), ev.snap("up-post")
     name = Path(old).name
+    kept = [rel for rel in pre["files"] if rel.endswith("/" + name)] if name else []
     observed = {"proposal": old, "stdin_isatty": approve.stdin_isatty, "reason": approve.reason, "exit_code": approve.exit_code,
-                "refusal": approve.stderr.strip().splitlines()[:2], "pending_output": pending.stdout.strip().splitlines()[:2],
-                "open": listed.get("open"), "untrusted": listed.get("untrusted")}
-    return reached_prompt(approve, name), observed
+                "refusal": approve.stderr.strip().splitlines()[:3],
+                "hint_to_propose_again": bool(PROPOSE_AGAIN.search(approve.stderr)),
+                "file_kept_unchanged": bool(kept) and all(post["files"].get(rel) == pre["files"][rel] for rel in kept),
+                "listed_open": bool(name) and name in json.dumps(listed.get("open") or [])}
+    passed = (refused_before_prompt(approve) and observed["hint_to_propose_again"] and observed["file_kept_unchanged"]
+              and not observed["listed_open"])
+    return passed, observed
 
 
 def p_doctor_passes(ev):
@@ -560,8 +571,7 @@ def p_foreign_refused(ev):
 def p_hint(ev):
     refused = ev.call("dv-b-approve-pa")
     text = refused.stderr
-    pattern = re.compile(r"propos\w*[^.\n]{0,40}\bagain\b|\bagain\b[^.\n]{0,40}propos|new proposal", re.I)
-    observed = {"stderr": text.strip().splitlines(), "hint_to_propose_again": bool(pattern.search(text))}
+    observed = {"stderr": text.strip().splitlines(), "hint_to_propose_again": bool(PROPOSE_AGAIN.search(text))}
     return refused_before_prompt(refused) and observed["hint_to_propose_again"], observed
 
 
@@ -629,7 +639,7 @@ PREDICATES = {
     "upgrade.self_unchanged": p_self_unchanged,
     "upgrade.recall_works": p_recall,
     "upgrade.index_rebuilds_automatically": p_index_rebuilds,
-    "upgrade.pending_proposal_valid_same_device": p_pending_valid,
+    "upgrade.pre_ledger_draft_refused_with_hint": p_pre_ledger_draft,
     "upgrade.doctor_passes": p_doctor_passes,
     "upgrade.version_schema_reported": p_version_schema,
     "upgrade.validate_clean": p_validate_clean,

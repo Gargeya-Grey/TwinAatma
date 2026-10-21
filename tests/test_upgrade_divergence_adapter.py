@@ -202,7 +202,7 @@ class FixedProductTests(unittest.TestCase):
     """Edit retained evidence to what a repaired product would print; the verdict must follow the evidence."""
 
     FIXES = (
-        "upgrade.pending_proposal_valid_same_device",
+        "upgrade.pre_ledger_draft_refused_with_hint",
         "upgrade.version_schema_reported",
         "upgrade.validate_clean",
         "divergence.doctor_flags_conflict_copy",
@@ -252,14 +252,9 @@ class FixedProductTests(unittest.TestCase):
     def repair(self, folder, data, case):
         stdout = lambda label: self.call(data, label)["stdout"]
         stderr = lambda label: self.call(data, label)["stderr"]
-        if case == "upgrade.pending_proposal_valid_same_device":
-            row = self.call(data, "up-approve")
-            old = json.loads(self.read(folder, self.call(data, "up-old-propose")["stdout"]))["proposal_path"]
-            record = json.loads(self.read(folder, row["record"]))
-            record["reason"] = "prompt_reached"
-            self.write(folder, row["record"], json.dumps(record, indent=2))
-            self.write(folder, stdout("up-approve"), "Proposal: " + Path(old).name + "\nApply this to People/Self.md? [y/N] ")
-            self.write(folder, stderr("up-approve"), "")
+        if case == "upgrade.pre_ledger_draft_refused_with_hint":
+            refusal = self.read(folder, stderr("up-approve"))
+            self.write(folder, stderr("up-approve"), refusal.rstrip("\n") + "\nIf it came from another device, propose it again on this device.\n")
         elif case == "upgrade.version_schema_reported":
             pre = json.loads(self.read(folder, "up-pre.json"))
             note = "\n[OK] Vault schema %s is supported by toolkit %s.\n" % (pre["marker"]["schema"], data["artifacts"]["wheel"]["version"])

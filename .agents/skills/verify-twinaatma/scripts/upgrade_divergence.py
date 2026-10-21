@@ -36,7 +36,7 @@ CASE_IDS = (
     "upgrade.self_unchanged",
     "upgrade.recall_works",
     "upgrade.index_rebuilds_automatically",
-    "upgrade.pending_proposal_valid_same_device",
+    "upgrade.pre_ledger_draft_refused_with_hint",
     "upgrade.doctor_passes",
     "upgrade.version_schema_reported",
     "upgrade.validate_clean",
