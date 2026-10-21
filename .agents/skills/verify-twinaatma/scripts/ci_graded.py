@@ -141,7 +141,7 @@ def verify_attestation(path, repository=REPOSITORY):
             certificate = item["verificationResult"]["signature"]["certificate"]
             claims.append({key: certificate.get(key) for key in (
                 "sourceRepositoryDigest", "sourceRepositoryURI", "runInvocationURI", "buildSignerURI",
-                "sourceRepositoryRef")})
+                "sourceRepositoryRef", "runnerEnvironment")})
     except (ValueError, KeyError, TypeError, AttributeError) as error:
         raise ValueError("Attestation verification returned an unreadable result") from error
     if not claims:
@@ -231,7 +231,8 @@ def check_binding(bundle, local, claims, repository):
                 if claim.get("sourceRepositoryDigest") == binding["commit"]
                 and str(claim.get("sourceRepositoryURI", "")).lower().endswith(suffix)
                 and run in str(claim.get("runInvocationURI", ""))
-                and WORKFLOW in str(claim.get("buildSignerURI", ""))]
+                and WORKFLOW in str(claim.get("buildSignerURI", ""))
+                and claim.get("runnerEnvironment") == "github-hosted"]
     require(matching, "Signed attestation does not match the bundle's commit, run and workflow")
     return system
 

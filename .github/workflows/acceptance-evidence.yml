@@ -43,7 +43,8 @@ jobs:
         with:
           python-version: "3.13"
       - name: Tooling
-        run: python -m pip install --upgrade pip setuptools wheel pyinstaller
+        # pip 26 refuses to install into a Python 3.9 environment, and the hook driver installs with this pip.
+        run: python -m pip install --upgrade "pip<26" setuptools wheel pyinstaller
       - name: Build the wheel and the executable
         run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
       - name: Installed artifacts (wheel, executable)
@@ -72,6 +73,9 @@ jobs:
       - name: Identity writers (native POSIX, in-job freeze of this commit)
         continue-on-error: true
         run: |
+          # The repository stores scripts/*.sh as mode 100644, and capture.sh runs rebuild_index.sh directly.
+          # The laptop sees them as executable; give the runner the same state. File content is unchanged.
+          chmod +x scripts/*.sh
           python -B "$SCRIPTS/ci_graded.py" freeze --output "$EVIDENCE/freeze/freeze.json"
           python -B "$SCRIPTS/identity_writers.py" --freeze "$EVIDENCE/freeze/freeze.json" --output "$EVIDENCE/writers"
       - name: Grade natively and write the bundle
@@ -87,9 +91,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-graded-linux
-          path: |
-            work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json
-            ${{ steps.attest.outputs.bundle-path }}
+          path: work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-linux.json
+          retention-days: 30
+      - name: Upload the attestation
+        if: ${{ !cancelled() && steps.attest.outputs.bundle-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-linux
+          path: ${{ steps.attest.outputs.bundle-path }}
           retention-days: 30
       - name: Upload the raw reports and evidence
         if: ${{ !cancelled() }}
@@ -131,7 +140,8 @@ jobs:
         with:
           python-version: "3.13"
       - name: Tooling
-        run: python -m pip install --upgrade pip setuptools wheel pyinstaller
+        # pip 26 refuses to install into a Python 3.9 environment, and the hook driver installs with this pip.
+        run: python -m pip install --upgrade "pip<26" setuptools wheel pyinstaller
       - name: Build the wheel and the executable
         run: python -B "$SCRIPTS/build.py" --output "$EVIDENCE/build"
       - name: Generated hooks on CPython 3.9 to 3.14 and the executable
@@ -157,9 +167,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ci-graded-windows
-          path: |
-            work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json
-            ${{ steps.attest.outputs.bundle-path }}
+          path: work/gc-artifacts/.knowledgeos/ci-bundles/ci-graded-windows.json
+          retention-days: 30
+      - name: Upload the attestation
+        if: ${{ !cancelled() && steps.attest.outputs.bundle-path != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-windows
+          path: ${{ steps.attest.outputs.bundle-path }}
           retention-days: 30
       - name: Upload the raw reports and evidence
         if: ${{ !cancelled() }}

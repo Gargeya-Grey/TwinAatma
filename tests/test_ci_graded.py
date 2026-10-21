@@ -112,13 +112,13 @@ class CiGradedTests(unittest.TestCase):
         return path
 
     # ------------------------------------------------------------------ the attestation boundary
-    def gh(self, *, commit=None, ok=True, run=RUN, signer=None):
+    def gh(self, *, commit=None, ok=True, run=RUN, signer=None, runner='github-hosted'):
         commit = commit or self.head
         certificate = {'sourceRepositoryDigest': commit, 'sourceRepositoryURI': 'https://github.com/' + REPO,
                        'runInvocationURI': 'https://github.com/{}/actions/runs/{}/attempts/{}'.format(REPO, *run),
                        'buildSignerURI': 'https://github.com/{}/{}@refs/heads/acceptance/ci-evidence'.format(
                            REPO, signer or ci_graded.WORKFLOW),
-                       'sourceRepositoryRef': 'refs/heads/acceptance/ci-evidence'}
+                       'sourceRepositoryRef': 'refs/heads/acceptance/ci-evidence', 'runnerEnvironment': runner}
         payload = json.dumps([{'verificationResult': {'signature': {'certificate': certificate}}}])
 
         def fake(command, env):
@@ -160,6 +160,9 @@ class CiGradedTests(unittest.TestCase):
 
     def test_attestation_from_another_workflow_is_refused(self):
         self.refused(self.bundle(self.linux_graded()), 'does not match the bundle', signer='.github/workflows/ci.yml')
+
+    def test_attestation_from_a_self_hosted_runner_is_refused(self):
+        self.refused(self.bundle(self.linux_graded()), 'does not match the bundle', runner='self-hosted')
 
     def test_stale_product_hash_is_refused(self):
         bundle = self.bundle(self.linux_graded())
