@@ -665,19 +665,28 @@ def core_refusal(path, base, current):
     return {"path": str(path), "report_sha256": sha(path), "transcript_sha256": sha(transcript), "tool": "memory_accept_self_update", "verdict": "PASS"}
 
 
-def bundle(writer_paths, *, data_paths=(), source_paths=(), recovery_paths=(), learning_paths=(), base=None, current=None):
+def bundle(writer_paths, *, data_paths=(), source_paths=(), recovery_paths=(), learning_paths=(), base=None, current=None,
+           pregraded=None):
+    """Combine native per-platform grades.
+
+    Each platform grades its own raw reports natively (focus_report, reused_data, recovery_report). A platform
+    that was graded elsewhere, such as an attested CI runner, supplies the dictionaries those functions
+    returned through `pregraded` (keys focused, reused, core, recovery, learning). They go through the same
+    combination checks below as locally graded results; no check is skipped for them.
+    """
     base = base or support_module("acceptance.py")
     current = current or base.product_hashes()
-    focused = [focus_report(Path(p).absolute(), base) for p in writer_paths]
+    pregraded = pregraded or {}
+    focused = [focus_report(Path(p).absolute(), base) for p in writer_paths] + list(pregraded.get("focused", ()))
     require({row["os_name"] for row in focused} == {"nt", "posix"}, "Native Windows hardlinks/junctions and native Linux symlinks/shell wrappers are both required")
-    reused = [reused_data(Path(p).absolute(), base, current) for p in data_paths]
+    reused = [reused_data(Path(p).absolute(), base, current) for p in data_paths] + list(pregraded.get("reused", ()))
     require({r["family"] for r in reused} == set(REUSED.values()), "A supported export/generated/census/maintenance/hook/validation caller lacks complete current public writer evidence")
-    core = [core_refusal(Path(p).absolute(), base, current) for p in source_paths if read(p).get("journey") == "core"]
+    core = [core_refusal(Path(p).absolute(), base, current) for p in source_paths if read(p).get("journey") == "core"] + list(pregraded.get("core", ()))
     require(core, "Missing actual tool-refusal writer coverage")
-    recovery = [base.recovery_report(Path(p).absolute(), current) for p in recovery_paths]
+    recovery = [base.recovery_report(Path(p).absolute(), current) for p in recovery_paths] + list(pregraded.get("recovery", ()))
     require({r["producer"] for r in recovery} >= {"verify-twinaatma.recovery-index/v1", "verify-twinaatma.recovery-locks/v1", "verify-twinaatma.recovery-write-faults/v1"}
             and all(any(c.get("verdict") == "PASS" and name.endswith(".complete") for name, c in r["checks"].items()) for r in recovery), "Index, native lock and partial-marker recovery coverage is incomplete")
-    learning = [base.learning_report(Path(p).absolute(), current) for p in learning_paths]
+    learning = [base.learning_report(Path(p).absolute(), current) for p in learning_paths] + list(pregraded.get("learning", ()))
     require(learning and all(r["checks"].get("learning.attributed_lessons.complete", {}).get("verdict") == "PASS" for r in learning), "The possible drift and attributed-lesson proposal writers lack complete current public coverage")
     census = read_census(ROOT)
     writer_roles = {"proposal", "index", "generated", "links", "export", "git-hooks", "retired", "database-reader", "sessions"}
@@ -696,11 +705,12 @@ def bundle(writer_paths, *, data_paths=(), source_paths=(), recovery_paths=(), l
                    "census": {"files": len(census["files"]), "mutation_sites": len(census["mutation_sites"]), "memory_tools": len(census["memory_tools"])},
                    "public_writer_scripts_expected": sorted(expected_scripts), "public_writer_scripts_observed": sorted(observed_scripts),
                    "unexercised_writer_families": unexercised, "owner_approval": "NOT CHECKED", "fixed54_credit": [OUTCOME]}
-    return {"path": str(Path(writer_paths[0]).absolute()), "report_sha256": sha(writer_paths[0]), "scope": "source",
+    return {"path": focused[0]["path"], "report_sha256": focused[0]["report_sha256"], "scope": "source",
             "producer": "verify-twinaatma.identity-writers-bundle/v1", "producer_sha256": sha(HERE / "identity_writers.py"),
             "grader_sha256": sha(__file__), "checks": {"identity.writers.complete": {"id": "identity.writers.complete", "verdict": "PASS",
             "expected": "Every supported alternative public writer and maintenance path preserves protected Self with complete current source evidence.",
-            "observed": observation, "evidence": [*map(str, writer_paths), *map(str, data_paths), *map(str, source_paths), *map(str, recovery_paths), *map(str, learning_paths)]}}}
+            "observed": observation, "evidence": [*map(str, writer_paths), *map(str, data_paths), *map(str, source_paths), *map(str, recovery_paths), *map(str, learning_paths),
+                         *(row["path"] for key in ("focused", "reused", "core", "recovery", "learning") for row in pregraded.get(key, ()))]}}}
 
 
 def main():
