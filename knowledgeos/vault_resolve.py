@@ -276,26 +276,57 @@ def require_vault(explicit: Path | str | None = None, cwd: Path | str | None = N
     return vault
 
 
-def _version_tuple(value: str) -> tuple[int, ...]:
-    parts: list[int] = []
-    for chunk in str(value or "").replace("-", ".").split("."):
-        digits = "".join(ch for ch in chunk if ch.isdigit())
-        parts.append(int(digits) if digits else 0)
-    return tuple(parts or (0,))
+_STAGE_RANK = {"dev": 0, "a": 1, "alpha": 1, "b": 2, "beta": 2, "c": 3, "rc": 3, "pre": 3, "preview": 3}
+_FINAL_RANK = 5
+_POST_RANK = 6
+
+
+def _version_tuple(value: str) -> tuple:
+    """A sortable key. A dev or pre-release sorts before its release (0.4.0-dev < 0.4.0).
+
+    ``0.4.0-dev``, ``0.4.0.dev0`` and ``0.4.0rc1`` all sit below ``0.4.0``; ``0.4`` equals
+    ``0.4.0``; a post release sits above it.
+    """
+    text = str(value or "").strip().lower().lstrip("v").split("+", 1)[0]
+    match = re.match(r"(\d+(?:\.\d+)*)(.*)$", text)
+    if match is None:
+        return ((0,), _FINAL_RANK, 0)
+    release = [int(part) for part in match.group(1).split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    rest = match.group(2)
+    stages = re.findall(r"(dev|alpha|beta|preview|pre|rc|post|a|b|c)[.\-_]*(\d*)", rest)
+    rank, number = _FINAL_RANK, 0
+    for name, digits in stages:
+        if name == "post":
+            if rank == _FINAL_RANK:
+                rank, number = _POST_RANK, int(digits or 0)
+            continue
+        candidate = _STAGE_RANK[name]
+        if rank in (_FINAL_RANK, _POST_RANK) or candidate < rank:
+            rank, number = candidate, int(digits or 0)
+    return (tuple(release), rank, number)
+
+
+def vault_declarations(vault: Path) -> dict:
+    """What the vault marker declares (``schema``, ``toolkit_min_version``, ...); ``{}`` if unreadable."""
+    marker = Path(vault) / ".knowledgeos-vault.json"
+    try:
+        if not marker.is_file() or marker.stat().st_size > MARKER_LIMIT:
+            return {}
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def vault_version_check(vault: Path) -> str | None:
     """Warn when a vault was created by a newer toolkit than this one.
 
     Returned rather than printed: the caller decides whether the human sees it.
+    Returns ``None`` when the vault is compatible.
     """
-    marker = Path(vault) / ".knowledgeos-vault.json"
-    if not marker.exists():
-        return None
-    try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
+    data = vault_declarations(vault)
     required = str(data.get("toolkit_min_version") or "")
     if not required:
         return None

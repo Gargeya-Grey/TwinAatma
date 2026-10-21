@@ -5,6 +5,7 @@ Lives in the package so the binary works on a data-only vault with no ``scripts/
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -130,6 +131,110 @@ def _check_hook_interpreter(vault: Path, hooks_dir: Path) -> bool:
     return valid
 
 
+def _check_version_and_schema(vault: Path) -> None:
+    """Say which toolkit this is, what the vault declares, and whether they fit.
+
+    A warning at most: an older vault is read as it is, and the next write keeps its schema.
+    """
+    from knowledgeos import __version__
+    from knowledgeos.schema import SCHEMA_V02, SCHEMA_V03
+    from knowledgeos.vault_resolve import vault_declarations, vault_version_check
+
+    declared = vault_declarations(vault)
+    schema = str(declared.get("schema") or "")
+    minimum = str(declared.get("toolkit_min_version") or "")
+    print(f"  [INFO] Installed toolkit version: {__version__}.")
+    if not declared:
+        print("  [INFO] The vault declares no schema (no readable vault marker); compatibility is unknown.")
+        return
+    print(
+        f"  [INFO] This vault declares schema {schema or '(none)'}"
+        + (f" and needs toolkit {minimum} or newer." if minimum else ".")
+    )
+    problems = []
+    newer = vault_version_check(vault)
+    if newer:
+        problems.append(newer)
+    if schema and schema not in {SCHEMA_V02, SCHEMA_V03}:
+        problems.append(
+            f"This toolkit reads schemas {SCHEMA_V02} and {SCHEMA_V03}, not {schema}. "
+            "Update the toolkit before writing notes."
+        )
+    for problem in problems:
+        print(f"  [WARNING] {problem}")
+    if not problems:
+        print(f"  [OK] Toolkit {__version__} is compatible with this vault (schema {schema or 'not declared'}).")
+
+
+# Names that sync tools give the second copy of a note edited on two devices.
+_CONFLICT_NAME = re.compile(
+    r"(?i)\.sync-conflict-\d{8}-\d{6}"  # Syncthing
+    r"|conflicted copy"  # Dropbox, Nextcloud
+    r"|\(case conflict"  # Dropbox on case-insensitive folders
+    r"|\bconflict(?:ed)?[ ._-]copy\b"
+)
+_ID_LINE = re.compile(r"(?m)^id:[ \t]*['\"]?([^\s'\"#]+)")
+_FRONTMATTER = re.compile(r"\A---\r?\n(.*?)(?:\r?\n---[ \t]*(?:\r?\n|\Z))", re.S)
+
+
+def find_conflict_copies(vault: Path) -> tuple[list[str], dict[str, list[str]], int]:
+    """``(named_copies, shared_ids, hidden)``. Read-only: no note is renamed, merged or rewritten.
+
+    ``named_copies`` carry a sync tool's conflict name. ``shared_ids`` maps an ``id:`` to the
+    notes that all claim it. ``hidden`` counts findings inside excluded sources, which are
+    not named.
+    """
+    from knowledgeos.indexer import iter_markdown
+    from knowledgeos.remembering import RememberingPolicy
+
+    policy = RememberingPolicy(vault)
+    copies: list[str] = []
+    ids: dict[str, list[str]] = {}
+    hidden = 0
+    for path in iter_markdown(vault):
+        rel = path.relative_to(vault.resolve()).as_posix()
+        text = policy.read(path)
+        named = _CONFLICT_NAME.search(path.name) is not None
+        if text is None:
+            hidden += int(named)
+            continue
+        if named:
+            copies.append(rel)
+        block = _FRONTMATTER.match(text)
+        match = _ID_LINE.search(block.group(1)) if block else None
+        if match:
+            ids.setdefault(match.group(1), []).append(rel)
+    shared = {key: sorted(paths) for key, paths in ids.items() if len(paths) > 1}
+    return sorted(copies), shared, hidden
+
+
+def _check_conflict_copies(vault: Path) -> None:
+    try:
+        copies, shared, hidden = find_conflict_copies(vault)
+    except Exception as exc:  # a diagnostic must not stop the report
+        print(f"  [WARNING] Could not check for sync conflict copies: {exc}")
+        return
+    if not (copies or shared or hidden):
+        print("  [OK] No sync conflict copies found.")
+        return
+    print(
+        "  [WARNING] A sync conflict means the same note changed on two devices and the sync "
+        "tool kept both."
+    )
+    print("            TwinAatma never merges, renames or deletes either copy. Compare them and")
+    print("            keep the one you want yourself.")
+    if copies:
+        print(f"  [WARNING] {len(copies)} sync conflict copy file(s):")
+        for rel in copies:
+            print(f"            {rel}")
+    if hidden:
+        print(f"  [WARNING] {hidden} more sync conflict copy file(s) are in excluded sources and not named.")
+    for note_id, paths in sorted(shared.items()):
+        print(f"  [WARNING] {len(paths)} notes share the id {note_id}, so they may be conflict copies:")
+        for rel in paths:
+            print(f"            {rel}")
+
+
 def run_doctor(vault: Path) -> int:
     from knowledgeos.indexer import index_schema_problem, index_state
     from knowledgeos.vault_resolve import is_vault_root
@@ -156,6 +261,9 @@ def run_doctor(vault: Path) -> int:
     else:
         print("  [ERROR] No .knowledgeos-vault.json or People/Self.md here.")
         passed = False
+
+    print("\n[*] Checking toolkit version and vault schema...")
+    _check_version_and_schema(vault)
 
     print("\n[*] Checking folder structure...")
     missing = [d for d in REQUIRED_DIRS if not (vault / d).exists()]
@@ -322,11 +430,15 @@ def run_doctor(vault: Path) -> int:
 
         health = ledger_health(vault)
         pending = list_open(vault)
-        if health["signed"]:
+        if health["signed"] and not (health["rejected_rows"] and not health["rows"]):
             print(f"  [OK] Proposal ledger is signed ({health['rows']} entries, outside the vault).")
             print(f"       Key: {health['key_source']}")
             print("       This detects tampering with vault-side content. It is not a")
             print("       defence against a program that can read your whole disk.")
+        elif health["signed"]:
+            # Every row failed: nothing in the ledger is trusted, so do not call it healthy.
+            print("  [WARNING] No ledger row verifies under this install's signing key.")
+            print(f"            Key: {health['key_source']}")
         else:
             print("  [WARNING] No signing key available; the ledger cannot be verified.")
         try:
@@ -347,6 +459,12 @@ def run_doctor(vault: Path) -> int:
                 f"  [WARNING] {health['rejected_rows']} ledger row(s) failed signature "
                 "verification and were ignored."
             )
+            print(
+                "            They were signed by a different key: this install's signing key was "
+                "lost or replaced,"
+            )
+            print("            or the ledger came from another device or install.")
+            print("            Those proposals cannot be approved here. Restore the signing key backup, or propose them again.")
         from knowledgeos.gate import vault_marker_mismatch
 
         mismatch = vault_marker_mismatch(vault)
@@ -363,6 +481,9 @@ def run_doctor(vault: Path) -> int:
             print("         Approve with: twinaatma self approve <file>")
     except Exception as exc:  # pragma: no cover - defensive
         print(f"  [WARNING] Could not read the gate ledger: {exc}")
+
+    print("\n[*] Checking for sync conflict copies...")
+    _check_conflict_copies(vault)
 
     print("\n[*] Checking toolkit assets...")
     try:

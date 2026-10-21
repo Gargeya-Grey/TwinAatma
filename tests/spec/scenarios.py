@@ -288,7 +288,7 @@ def approval_destructive_word(case: Case) -> None:
     before = case.self_path.read_bytes()
     asked: list[str] = []
     sink = io.StringIO()
-    with mock.patch("sys.stdin.isatty", return_value=True), mock.patch(
+    with mock.patch("knowledgeos.gate.is_real_console", return_value=True), mock.patch(
         "knowledgeos.gate._require_human_terminal", return_value=None
     ), mock.patch("builtins.input", side_effect=lambda prompt="": asked.append(prompt) or "y"), mock.patch("sys.stdout", sink):
         code = _self_approve([str(path), "--vault", str(case.vault)])

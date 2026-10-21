@@ -3162,7 +3162,7 @@ class RoundElevenRegressionTests(TempVaultCase):
             shown.append(prompt)
             return answers.pop(0)
 
-        with mock.patch("sys.stdin.isatty", return_value=True), \
+        with mock.patch("knowledgeos.gate.is_real_console", return_value=True), \
                 mock.patch("knowledgeos.gate._require_human_terminal", return_value=None), \
                 mock.patch("builtins.input", side_effect=fake_input), \
                 mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as out:

@@ -35,3 +35,10 @@ proposal content and duplicate-marker refusals remain separate from human approv
 A simulated TTY in tests proves a function path, not human consent. Terminal presence is a deployment trust assumption. Arbitrary owner-level shell or terminal control can bypass that assumption, as README documents. Do not claim stronger isolation than the deployment enforces. Proposal-only memory operations remain available when the human approval gate is pending.
 
 Use [complete alternative-writer preservation](../references/source-identity-writers.md) for native Windows/Linux aliases, actual public writers and all reused source families. Include both focused reports in the cumulative score. This source outcome leaves independent approval pending.
+
+## Journey fixes (21 October 2026)
+
+- `gate.describe()` refuses every ledger row that is not an open draft (rejected, applied, superseded) before any diff or prompt, even when the file bytes were restored.
+- The refusal for a proposal this install's ledger does not hold (also `reject`) now says: propose it again on this device, or restore the signing key backup.
+- Approval needs a real console on Windows: `gate.is_real_console` checks `GetConsoleMode`, so stdin on the NUL device is refused with exit 2 like a pipe.
+- A draft written before the signed ledger existed takes the same "not registered" refusal and hint; no migration, no new way to approve.

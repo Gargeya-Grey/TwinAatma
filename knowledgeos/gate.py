@@ -1106,6 +1106,37 @@ def _validated_proposal(
     return {"patch": patch, "section": section, "mode": mode, "self_text": self_text}
 
 
+NOT_REGISTERED_HINT = (
+    "Only proposals created by this install can be approved. "
+    "If it came from another device, propose it again on this device. "
+    "If this install's signing key was lost, restore the key backup to approve it, "
+    "or propose it again."
+)
+
+_STATUS_REASON = {
+    "rejected": "proposal was rejected; it cannot be approved",
+    "applied": "proposal was already applied; it cannot be approved again",
+    "superseded": "proposal was superseded by a newer accepted change to the same section",
+}
+
+
+def _closed_row_refusal(row: dict[str, Any], text: str) -> dict[str, Any]:
+    """The refusal for a ledger row that is not an open draft."""
+    status = str(row.get("status") or "")
+    reason = _STATUS_REASON.get(status) or (
+        f"proposal is {status}; only open drafts can be approved"
+        if status
+        else "proposal is not an open draft; only open drafts can be approved"
+    )
+    hint = "Propose the change again if you still want it."
+    if hashlib.sha256(text.encode("utf-8")).hexdigest() != str(row.get("file_sha256") or ""):
+        hint += (
+            " The file also differs from the ledger record: the proposal file was "
+            "edited after it was created."
+        )
+    return {"error": reason, "hint": hint, "status": status or "unknown", "mutated_self": False}
+
+
 def describe(vault: Path, proposals_dir: Path, proposal_path: str) -> dict[str, Any]:
     """Return an authentic proposal against its expected Self base for preview."""
     path, problem = _resolve_proposal(vault, proposals_dir, proposal_path)
@@ -1118,13 +1149,17 @@ def describe(vault: Path, proposals_dir: Path, proposal_path: str) -> dict[str, 
     if row is None:
         return {
             "error": "proposal is not registered in this install's Self proposal ledger",
-            "hint": "Only proposals created by this install can be approved.",
+            "hint": NOT_REGISTERED_HINT,
         }
     self_path = Path(vault) / "People" / "Self.md"
     self_problem = _self_file_problem(self_path)
     if self_problem:
         return self_problem
     text = path.read_text(encoding="utf-8", errors="replace")
+    # Only an open draft may reach the approval screen. A rejected, applied or
+    # superseded row whose file bytes were put back must not look approvable.
+    if str(row.get("status") or "") != "draft":
+        return _closed_row_refusal(row, text)
     validated = _validated_proposal(self_path, text, row)
     if validated.get("error"):
         return validated
@@ -1574,6 +1609,38 @@ def _write_file(path: Path, text: str) -> None:
     write_preserving_endings(path, text)
 
 
+def is_real_console(stream: Any) -> bool:
+    """True when ``stream`` is a terminal a human can read and type at.
+
+    ``isatty()`` alone is not enough on Windows: the NUL device reports as a terminal,
+    so a program started with stdin on NUL reached the approval prompt. There the stream
+    must also be an attached console handle (``GetConsoleMode`` succeeds). A stream with
+    no operating-system descriptor at all (a test double) keeps its ``isatty()`` answer.
+    """
+    try:
+        if not stream.isatty():
+            return False
+    except (AttributeError, ValueError, OSError):
+        return False
+    if os.name != "nt":
+        return True
+    try:
+        descriptor = stream.fileno()
+    except (AttributeError, ValueError, OSError):
+        return True
+    if not isinstance(descriptor, int):
+        return True
+    try:
+        import ctypes
+        import msvcrt
+
+        handle = msvcrt.get_osfhandle(descriptor)
+        mode = ctypes.c_uint32()
+        return bool(ctypes.windll.kernel32.GetConsoleMode(ctypes.c_void_p(handle), ctypes.byref(mode)))
+    except (AttributeError, TypeError, ValueError, OSError, ImportError):
+        return False
+
+
 def _require_human_terminal() -> str | None:
     """None when this process really is a human at a terminal, else a refusal.
 
@@ -1584,8 +1651,8 @@ def _require_human_terminal() -> str | None:
     and it makes ``authorized_by: terminal`` true rather than a forged claim.
     """
     try:
-        stdin_ok = sys.stdin.isatty()
-        stdout_ok = sys.stdout.isatty()
+        stdin_ok = is_real_console(sys.stdin)
+        stdout_ok = is_real_console(sys.stdout)
     except (AttributeError, ValueError):
         return "identity changes must be approved by a human in a terminal"
     if not (stdin_ok and stdout_ok):
@@ -1632,7 +1699,7 @@ def _apply(
                     "hint": (
                         "The ledger lives outside the vault, signed with this machine's key. "
                         "Hand-written or legacy proposals cannot change Self.md; create a new "
-                        "proposal with memory_propose_self_update."
+                        "proposal with memory_propose_self_update. " + NOT_REGISTERED_HINT
                     ),
                 }
             status = str(row.get("status") or "")
@@ -1819,7 +1886,8 @@ def reject(vault: Path, proposals_dir: Path, proposal_path: str, reason: str = "
             if row is None:
                 return {
                     "error": "not a Self proposal registered in this install's ledger",
-                    "hint": "This tool only archives proposals created by the toolkit.",
+                    "hint": "This tool only archives proposals created by the toolkit. "
+                    + NOT_REGISTERED_HINT,
                 }
             status = str(row.get("status") or "")
             if status == "applied":
