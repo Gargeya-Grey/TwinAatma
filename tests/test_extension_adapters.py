@@ -63,10 +63,9 @@ class ExtensionAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'module is missing'):
             self.metric.snapshot([], [], extension_paths={'absent': []})
 
-    def test_every_declared_extension_module_exists_or_is_pending(self):
-        pending = {'resource-budget'}
+    def test_every_declared_extension_module_exists(self):
         for name, spec in self.metric.EXTENSION_ADAPTERS.items():
-            if name in pending or name in ('fake', 'absent'):
+            if name in ('fake', 'absent'):
                 continue
             self.assertIsNotNone(self.metric.ADAPTER_REQUIREMENTS['extensions'][name]['module_sha256'], name)
 

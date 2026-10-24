@@ -11,6 +11,7 @@ Safety contract (see Decisions/self-gate-and-index-integrity.md):
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -613,6 +614,32 @@ Assets/papers/
     cursor_cfg = build_config("cursor", target)
     plan.write(target / ".cursor" / "mcp.json", json.dumps(cursor_cfg, indent=2) + "\n")
     plan.write(target / "mcp.cursor.json", json.dumps(cursor_cfg, indent=2) + "\n")
+
+    # A later setup-host can reconnect unchanged generated files after a restore.
+    # Retain older proof on refresh, but never adopt an edited file as generated.
+    receipt = plain_vault_path(target, target / ".knowledgeos-init.json")
+    previous_files = {}
+    if receipt.exists():
+        try:
+            previous = json.loads(receipt.read_bytes()).get("generated_host_files", {})
+            if previous.get("version") == 1 and isinstance(previous.get("files"), dict):
+                previous_files = previous["files"]
+        except (ValueError, AttributeError):
+            pass
+    expected = {
+        ".cursor/mcp.json": json.dumps(cursor_cfg, indent=2) + "\n",
+        "mcp.cursor.json": json.dumps(cursor_cfg, indent=2) + "\n",
+    }
+    if rendered_hooks is not None:
+        expected[".cursor/hooks.json"] = rendered_hooks
+    generated_files = {}
+    for relative, text in expected.items():
+        path = plain_vault_path(target, target / relative)
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if content == text.encode("utf-8") or previous_files.get(relative) == digest:
+            generated_files[relative] = digest
+    result["generated_host_files"] = {"version": 1, "files": generated_files}
 
     # Build the index and validate in-process so the new vault works without scripts/.
     from knowledgeos.indexer import rebuild_index

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -103,6 +104,86 @@ def config_target(host: str, vault: Path) -> Path | None:
     return None
 
 
+def _generated_reconnect_plan(
+    vault: Path, selected: Path, selected_payload: bytes,
+) -> tuple[list[tuple[Path, bytes | None, bytes]], list[str]]:
+    """Refresh only unchanged initializer output, never infer ownership from commands."""
+    from knowledgeos.data_ops import plain_vault_path
+    from knowledgeos.init_vault import _hooks_config
+    from knowledgeos.resources import toolkit_root
+
+    receipt = plain_vault_path(vault, vault / ".knowledgeos-init.json")
+    receipt_before = receipt.read_bytes() if receipt.exists() else None
+    report = json.loads(receipt_before) if receipt_before is not None else {}
+    if not isinstance(report, dict):
+        raise InvalidHostConfig(f"Preserved {receipt}: the init receipt must be a JSON object.")
+    ownership = report.get("generated_host_files", {"version": 1, "files": {}})
+    if (not isinstance(ownership, dict) or ownership.get("version") != 1
+            or not isinstance(ownership.get("files"), dict)
+            or any(not isinstance(value, str) or len(value) != 64
+                   or any(char not in "0123456789abcdef" for char in value)
+                   for value in ownership["files"].values())):
+        raise InvalidHostConfig(f"Preserved {receipt}: unsupported generated-host ownership receipt.")
+    recorded = dict(ownership["files"])
+    cursor = (json.dumps(build_config("cursor", vault), indent=2) + "\n").encode("utf-8")
+    generated = {".cursor/mcp.json": cursor, "mcp.cursor.json": cursor}
+    hooks = plain_vault_path(vault, vault / ".cursor/hooks.json")
+    if hooks.exists():
+        source = toolkit_root()
+        template = source / ".cursor/hooks.json"
+        if not template.is_file():
+            raise UnsupportedHost("The installed Cursor hook template is missing. Reinstall the toolkit and retry.")
+        generated[".cursor/hooks.json"] = _hooks_config(template, vault, source).encode("utf-8")
+    writes: list[tuple[Path, bytes | None, bytes]] = []
+    preserved: list[str] = []
+    for relative, payload in generated.items():
+        target = plain_vault_path(vault, vault / relative)
+        if not target.exists():
+            continue
+        original = target.read_bytes()
+        try:
+            data = json.loads(original)
+        except (ValueError, UnicodeError) as exc:
+            raise InvalidHostConfig(f"Preserved {target}: cannot read its JSON ({exc}). Repair it and retry.") from exc
+        if not isinstance(data, dict):
+            raise InvalidHostConfig(f"Preserved {target}: the config must be a JSON object.")
+        if relative == ".cursor/hooks.json":
+            groups = data.get("hooks")
+            if (not isinstance(groups, dict)
+                    or any(not isinstance(group, list) for group in groups.values())
+                    or any(not isinstance(entry, dict) or not isinstance(entry.get("command"), str)
+                           or not entry["command"].strip()
+                           for group in groups.values() for entry in group)):
+                raise InvalidHostConfig(f"Preserved {target}: hooks must contain lists of command objects.")
+        else:
+            servers = data.get("mcpServers", {})
+            owned = servers.get("knowledgeos", {}) if isinstance(servers, dict) else None
+            if (not isinstance(servers, dict) or not isinstance(owned, dict)
+                    or not isinstance(owned.get("env", {}), dict)):
+                raise InvalidHostConfig(f"Preserved {target}: mcpServers, knowledgeos and its env must be JSON objects.")
+        if target == selected:
+            if selected_payload == payload:
+                recorded[relative] = hashlib.sha256(payload).hexdigest()
+            continue
+        if original == payload:
+            recorded[relative] = hashlib.sha256(payload).hexdigest()
+        elif ownership["files"].get(relative) == hashlib.sha256(original).hexdigest():
+            writes.append((target, original, payload))
+            recorded[relative] = hashlib.sha256(payload).hexdigest()
+        elif relative == ".cursor/hooks.json":
+            raise InvalidHostConfig(
+                f"Preserved {target}: hooks were edited or have no matching generation receipt. "
+                f"Run `twinaatma init {vault}` to prepare hooks.new.json, then review and merge "
+                "your hooks before retrying setup-host. No host configuration was changed."
+            )
+        else:
+            preserved.append(f"Preserved {target}: custom or unrecorded MCP config; reconnect that host separately if needed.")
+    if receipt_before is not None and recorded != ownership["files"]:
+        report["generated_host_files"] = {"version": 1, "files": recorded}
+        writes.append((receipt, receipt_before, (json.dumps(report, indent=2) + "\n").encode("utf-8")))
+    return writes, preserved
+
+
 def write_config(host: str, vault: Path, transport: str = "stdio") -> Path:
     target = config_target(host, vault)
     if target is None:
@@ -111,26 +192,27 @@ def write_config(host: str, vault: Path, transport: str = "stdio") -> Path:
             "into that host's MCP settings."
         )
     from knowledgeos.data_ops import plain_vault_path
-    from knowledgeos.textio import atomic_write_bytes
+    from knowledgeos.textio import atomic_create_bytes, atomic_write_bytes
 
     try:
         target = plain_vault_path(vault, target)
     except ValueError as exc:
         raise InvalidHostConfig(str(exc)) from exc
+    original = target.read_bytes() if target.exists() else None
     payload = build_config(host, vault, transport)
     if host == "codex":
         from knowledgeos.codex_config import UnsafeToml, merge, render
         server = payload["mcp_servers"]["knowledgeos"]
         try:
-            text = merge(target.read_bytes().decode("utf-8"), server,
-                         remove_owned=("cwd",) if "cwd" not in server else ()) if target.exists() else render(server)
+            text = merge(original.decode("utf-8"), server,
+                         remove_owned=("cwd",) if "cwd" not in server else ()) if original is not None else render(server)
         except (UnsafeToml, UnicodeError) as exc:
             raise InvalidHostConfig(f"Preserved {target}: {exc}") from exc
     else:
         existing: dict = {}
-        if target.exists():
+        if original is not None:
             try:
-                existing = json.loads(target.read_text(encoding="utf-8"))
+                existing = json.loads(original)
             except (OSError, ValueError) as exc:
                 raise InvalidHostConfig(f"Preserved {target}: cannot read its JSON ({exc}). Repair the existing config and retry.") from exc
             if not isinstance(existing, dict):
@@ -153,9 +235,29 @@ def write_config(host: str, vault: Path, transport: str = "stdio") -> Path:
         servers["knowledgeos"] = {**owned, **generated, "env": {**owned.get("env", {}), **generated["env"]}}
         existing[key] = servers
         text = json.dumps(existing, indent=2) + "\n"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    plain_vault_path(vault, target)
-    atomic_write_bytes(target, text.encode("utf-8"))
+    contents = text.encode("utf-8")
+    try:
+        reconnect, preserved = _generated_reconnect_plan(vault, target, contents)
+    except (ValueError, OSError) as exc:
+        raise InvalidHostConfig(f"Cannot reconnect generated host files; existing configuration was preserved: {exc}") from exc
+    writes = [(target, original, contents), *reconnect]
+    for path, before, _ in writes:
+        plain_vault_path(vault, path)
+        if (path.read_bytes() if path.exists() else None) != before:
+            raise InvalidHostConfig(f"Preserved {path}: configuration changed during setup. Retry.")
+    for path, before, after in writes:
+        if before == after:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        plain_vault_path(vault, path)
+        if (path.read_bytes() if path.exists() else None) != before:
+            raise InvalidHostConfig(f"Preserved {path}: configuration changed during setup. Retry.")
+        if before is None:
+            atomic_create_bytes(path, after)
+        else:
+            atomic_write_bytes(path, after)
+    for message in preserved:
+        print(message, file=sys.stderr)
     return target
 
 
@@ -184,7 +286,7 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
     parser.add_argument(
         "--write",
         action="store_true",
-        help="Write into the host's project config (e.g. <vault>/.codex/config.toml)",
+        help="Write the host's project config and reconnect unchanged generated Cursor files to this installation",
     )
     parser.add_argument("--print", dest="do_print", action="store_true")
     args = parser.parse_args(argv)

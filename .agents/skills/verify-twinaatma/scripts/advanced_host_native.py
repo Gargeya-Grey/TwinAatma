@@ -154,6 +154,10 @@ def dependency_hashes():
     return {"manifest_sha256": DEPENDENCY_MANIFEST_SHA256, "files": files}
 
 
+def load_freeze_binding():
+    return load_module(SCRIPTS / "host_freeze.py", "_host_freeze_bridge")
+
+
 def load_grading_dependency():
     dependency_hashes()
     if any(name == "yaml" or name.startswith("yaml.") for name in sys.modules):
@@ -211,6 +215,9 @@ def binding(path, current, operation="score"):
     }
     if operation == "installed-move":
         bound["move_helpers"] = {name: sha(plain_file(SCRIPTS / name)) for name in MOVE_SUPPORT}
+    else:
+        bound["freeze_module_sha256"] = sha(plain_file(SCRIPTS / "host_freeze.py"))
+        bound["pin_sha256"] = sha(plain_file(SCRIPTS / "host-freeze-pin.json"))
     return bound
 
 
@@ -251,7 +258,7 @@ def validate_result(result, bound, native):
     if not isinstance(result, dict) or set(result) != RESULT_KEYS:
         raise ValueError("Native grader returned an unfamiliar or incomplete result schema")
     expected_report = report_windows_path(bound)
-    producer = ROOT / "work/gc-artifacts/.knowledgeos/advanced-host-c-20261020/advanced_host.py"
+    producer = load_freeze_binding().load_binding(ROOT).base / "advanced_host.py"
     if (result["path"] != expected_report or result["report_sha256"] != bound["report_sha256"]
             or result["scope"] != "real_host" or result["producer"] != PRODUCER
             or result["adapter_sha256"] != bound["adapter_sha256"]
@@ -546,8 +553,9 @@ def native_main(operation):
         result = load_move_adapter().grade(report, supplied["report_sha256"])
     else:
         adapter = load_module(SCRIPTS / "advanced_host_acceptance.py", "_native_bridge_adapter")
-        producer_path = ROOT / "work/gc-artifacts/.knowledgeos/advanced-host-c-20261020/advanced_host.py"
-        if sha(plain_file(producer_path)) != adapter.PINNED_SUPPORT["advanced_host.py"]:
+        pinned = adapter.pinned()
+        producer_path = pinned.base / "advanced_host.py"
+        if sha(plain_file(producer_path)) != pinned.support["advanced_host.py"]:
             raise ValueError("Bridge infrastructure probe found changed retained producer bytes")
         producer = load_module(producer_path, "_native_bridge_producer_import_only")
         sample = "---\ntitle: native bridge infrastructure only\naccepted_host_outcomes: 0\n---\n"

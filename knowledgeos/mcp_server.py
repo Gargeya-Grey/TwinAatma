@@ -76,7 +76,7 @@ class MCPServer:
             arguments = params.get("arguments") or {}
             try:
                 result = dispatch(self.api, name, arguments)
-                payload = json.dumps(result, indent=2, default=str)
+                payload = json.dumps(result, ensure_ascii=False, separators=(",", ":"), default=str)
                 # A protocol-level failure is any result that reports one, not only one
                 # whose top-level key is literally `error`: refusals also arrive as
                 # `{"ok": False, ...}` and `{"missing": [...]}`, and a strict client that

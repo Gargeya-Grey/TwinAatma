@@ -17,9 +17,10 @@ import time
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[4]
-BASE = ROOT / "work/gc-artifacts/.knowledgeos/advanced-host-c-20261020"
-FREEZE = ROOT / "work/gc-artifacts/.knowledgeos/acceptance-c-20261020/product-freeze.json"
-FROZEN_SHA256 = "bfc17aa0b445bedfd63670c9d7f4f594faa70c575ec8b93a0ae9db38a38dc720"
+_FREEZE_SPEC = importlib.util.spec_from_file_location("_host_freeze_adapter", Path(__file__).with_name("host_freeze.py"))
+freeze_binding = importlib.util.module_from_spec(_FREEZE_SPEC)
+_FREEZE_SPEC.loader.exec_module(freeze_binding)
+PIN_PATH = freeze_binding.PIN_PATH
 RUBRIC = ROOT / ".agents/skills/verify-twinaatma/references/acceptance-rubric.json"
 RUBRIC_SHA256 = "744e4913702f6fdf344f233491f019737aa1a2d5adf65edf7ab1c48fce98aa91"
 PRODUCER = "verify-twinaatma.advanced-host-staged/v2"
@@ -27,18 +28,13 @@ LABELS = ("harbor-brief", "harbor-change", "harbor-next")
 ROLES = ("init", "doctor", "setup", "host-version", *LABELS)
 TARGETS = ("QUALITY.correction_lifecycle", "LEARNING.host_outcome_loop", "PRIVACY.selective_capture", "PRIVACY.untrusted_notes")
 REQUIREMENTS = {identifier: ["advanced_host." + identifier] for identifier in TARGETS}
-PINNED_SUPPORT = {
-    "advanced_host.py": "884e7b3175162f1f6240c049af49a451bf29a3a44abc6e31924e60d523c71465",
-    "controls.py": "d4d526f82feb76e162aa9e07e9b02459ca4c0bb242b416deac206ea497e6e3ee",
-    "expectations.json": "b75ea9d59ec512e58dc6034aafaaaa455d59b5e97066b37d95195bd1e9104a1c",
-    "prepared.json": "2a6904186a843e25eaa1370af822e9b50b51f3e47a7f7177ce45176508cd1287",
-    "private/input.json": "746eb942e2338ce51b9c2a060d18e2e78c7714a085d42d11aeeeca40923f047c",
-    "outbound-payload-review.json": "07a506fb2f0d63b67f9a133d41af051868dd589acf94c889f4c253c5cedb7972",
-}
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 RAW_EVIDENCE_SCHEMA = "verify-twinaatma.raw-evidence/v2"
-NATIVE_CLI = Path("C:/Users/Gargeya/.codex/packages/standalone/releases/0.163.0-x86_64-pc-windows-msvc/bin/codex.exe")
-NATIVE_CLI_SHA256 = "2692c8c7bb2cf8b0aefe638741fc90236f4b824c59578ce84994f9de58200993"
+
+
+def pinned():
+    """The one checked binding: freeze folder, freeze hash, support hashes, host identity."""
+    return freeze_binding.load_binding(ROOT, PIN_PATH)
 
 
 def sha(path):
@@ -180,20 +176,16 @@ def source_server(directory, server):
 
 
 def checked_authorization_values(directory, data, binding, authorization, claim, authorization_sha256,
-                                 *, first_model_ns, initialized_ns):
+                                 *, first_model_ns, initialized_ns, pin):
     if (not isinstance(authorization_sha256, str) or not HEX.fullmatch(authorization_sha256)
             or data.get("root_authorization") != authorization_sha256
             or binding.get("root_authorization") != authorization_sha256
-            or not isinstance(authorization, dict) or authorization.get("status") != "approved"
-            or authorization.get("product_freeze_sha256") != FROZEN_SHA256
-            or authorization.get("payload_inventory_sha256") != PINNED_SUPPORT["outbound-payload-review.json"]
-            or not isinstance(authorization.get("allowed_units"), dict)
-            or type(authorization["allowed_units"].get("advanced-source")) is not int
-            or authorization["allowed_units"]["advanced-source"] != 3
-            or not isinstance(authorization.get("direct_user_reply"), str) or not authorization["direct_user_reply"].strip()):
+            or freeze_binding.authorization_problem(authorization, pin.frozen_sha256, pin.inventory_sha256,
+                                                    ("advanced-source",), maximum=9,
+                                                    model=pin.host["configured_model"]) is not None):
         raise ValueError("Host direct authorization does not bind the fixed product and reviewed three-chat unit")
-    expected_claim = {"authorization_sha256": authorization_sha256, "product_freeze_sha256": FROZEN_SHA256,
-                      "payload_inventory_sha256": PINNED_SUPPORT["outbound-payload-review.json"],
+    expected_claim = {"authorization_sha256": authorization_sha256, "product_freeze_sha256": pin.frozen_sha256,
+                      "payload_inventory_sha256": pin.inventory_sha256,
                       "directory": str(directory), "unit": "advanced-source", "maximum_model_conversations": 3}
     if (not isinstance(claim, dict) or set(claim) != {*expected_claim, "claimed_ns"}
             or any(claim.get(key) != value for key, value in expected_claim.items())
@@ -204,15 +196,15 @@ def checked_authorization_values(directory, data, binding, authorization, claim,
         raise ValueError("Host authorization claim is absent, reused, mismatched or not recorded before its first model launch")
 
 
-def authorization_support(directory, data, binding):
-    authorization_path = plain_file(BASE, "human-trial-authorization.json")
-    claim_path = plain_file(BASE, "advanced-source-claim.json")
+def authorization_support(directory, data, binding, pin):
+    authorization_path = plain_file(pin.base, "human-trial-authorization.json")
+    claim_path = plain_file(pin.base, "advanced-source-claim.json")
     authorization_sha256, claim_sha256 = sha(authorization_path), sha(claim_path)
     authorization, claim = read_json(authorization_path), read_json(claim_path)
     first_model_ns = min(read_json(plain_file(directory, label + ".launch.json"))["started_ns"] for label in LABELS)
     initialized_ns = max(read_json(plain_file(directory, role + ".completion.json"))["ended_ns"] for role in ROLES if role not in LABELS)
     checked_authorization_values(directory, data, binding, authorization, claim, authorization_sha256,
-                                 first_model_ns=first_model_ns, initialized_ns=initialized_ns)
+                                 first_model_ns=first_model_ns, initialized_ns=initialized_ns, pin=pin)
     if sha(authorization_path) != authorization_sha256 or sha(claim_path) != claim_sha256:
         raise ValueError("Host authorization or single-use claim changed during observation")
     return {"human-trial-authorization.json": authorization_sha256, "advanced-source-claim.json": claim_sha256}
@@ -250,27 +242,28 @@ def checked_command_raw_schema(command, launch, final):
         raise ValueError("Complete raw command launch/completion binding differs")
 
 
-def checked_host_version(host_identity, record, events, redactor):
-    if host_identity != {"name": "codex-cli", "version": "codex-cli 0.163.0", "configured_model": "gpt-6.1-sol", "mode": "native ephemeral source host"}:
+def checked_host_version(host_identity, record, events, redactor, pin):
+    native_cli = Path(pin.host["cli"])
+    if host_identity != {"name": "codex-cli", "version": pin.host["version"], "configured_model": pin.host["configured_model"], "mode": "native ephemeral source host"}:
         raise ValueError("Actual host version, configured model or native mode differs")
     raw = raw_stdout(events, record, redactor, role="host-version", require_current=True)
     command = record.get("command")
-    if (raw != b"codex-cli 0.163.0\n" or hashlib.sha256(raw).hexdigest() != record.get("stdout_sha256")
-            or command not in ([str(NATIVE_CLI), "--version"], ["codex", "--version"])
+    if (raw != (pin.host["version"] + "\n").encode("utf-8") or hashlib.sha256(raw).hexdigest() != record.get("stdout_sha256")
+            or command not in ([str(native_cli), "--version"], ["codex", "--version"])
             or record.get("stopped") is not True or type(record.get("exit_code")) is not int or record["exit_code"] != 0):
         raise ValueError("Host identity is not the actual retained version command")
     try:
-        for cursor in (NATIVE_CLI, *NATIVE_CLI.parents):
+        for cursor in (native_cli, *native_cli.parents):
             info = cursor.lstat()
             if (cursor.is_symlink() or getattr(info, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
-                    or cursor == NATIVE_CLI and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
-                    or cursor != NATIVE_CLI and not stat.S_ISDIR(info.st_mode)):
+                    or cursor == native_cli and (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1)
+                    or cursor != native_cli and not stat.S_ISDIR(info.st_mode)):
                 raise ValueError("Native host executable uses a linked or non-plain path")
-        if NATIVE_CLI.resolve(strict=True) != NATIVE_CLI or sha(NATIVE_CLI) != NATIVE_CLI_SHA256:
+        if native_cli.resolve(strict=True) != native_cli or sha(native_cli) != pin.host["cli_sha256"]:
             raise ValueError("Native host executable differs from its independent identity pin")
         if command[0] == "codex":
             resolved = shutil.which("codex")
-            if not resolved or Path(resolved).resolve(strict=True) != NATIVE_CLI:
+            if not resolved or Path(resolved).resolve(strict=True) != native_cli:
                 raise ValueError("Bare host command does not resolve to the independently pinned executable")
     except OSError as error:
         raise ValueError("Native host executable identity is unavailable") from error
@@ -562,17 +555,17 @@ def regrade_observation(host, observation, report):
 def advanced_host_report(path, current):
     path = Path(path).absolute()
     directory = path.parent
-    if directory.parent != BASE or not re.fullmatch(r"native-\d{8}-\d{6}-[0-9a-f]{8}", directory.name) or path.name != "report.json":
+    pin = pinned()
+    if directory.parent != pin.base or not re.fullmatch(r"native-\d{8}-\d{6}-[0-9a-f]{8}", directory.name) or path.name != "report.json":
         raise ValueError("Host report is outside the trusted corrected journey")
     path = plain_file(directory, path.name)
-    support = {name: sha(plain_file(BASE, name)) for name in PINNED_SUPPORT}
-    if support != PINNED_SUPPORT:
+    support = {name: sha(plain_file(pin.base, name)) for name in freeze_binding.SUPPORT_NAMES}
+    if support != pin.support:
         raise ValueError("Host original/current producer, support or literal expectations changed")
-    if sha(plain_file(FREEZE.parent, FREEZE.name)) != FROZEN_SHA256 or sha(plain_file(RUBRIC.parent, RUBRIC.name)) != RUBRIC_SHA256:
+    if sha(plain_file(pin.base, freeze_binding.FREEZE_NAME)) != pin.frozen_sha256 or sha(plain_file(RUBRIC.parent, RUBRIC.name)) != RUBRIC_SHA256:
         raise ValueError("Host frozen source manifest or fixed54 rubric changed")
-    frozen = read_json(FREEZE)
-    product = frozen.get("product_hashes") or frozen.get("product")
-    if not isinstance(product, dict) or len(product) != 102 or any(sha(plain_file(ROOT, name)) != digest for name, digest in product.items()):
+    product = dict(pin.product)
+    if set(product) != set(freeze_binding.toolkit_inputs(ROOT)) or any(sha(plain_file(ROOT, name)) != digest for name, digest in product.items()):
         raise ValueError("Host report is stale against the complete frozen source inputs")
     bound_current = {name: digest for name, digest in product.items() if name == "AGENTS.md" or Path(name).parent.as_posix() in ("knowledgeos", ".cursor/hooks") and Path(name).suffix == ".py"}
     if bound_current != current:
@@ -587,7 +580,7 @@ def advanced_host_report(path, current):
             or data.get("rubric_sha256") != RUBRIC_SHA256 or data.get("expected_sha256") != support["expectations.json"]
             or data.get("private_input_sha256") != support["private/input.json"] or data.get("failure") is not None
             or data.get("automatic_fixed54_credit") is not False
-            or binding.get("product_manifest") != str(FREEZE) or binding.get("product_manifest_sha256") != FROZEN_SHA256
+            or binding.get("product_manifest") != str(pin.freeze) or binding.get("product_manifest_sha256") != pin.frozen_sha256
             or binding.get("product_hashes") != product or binding.get("expectations_sha256") != support["expectations.json"]
             or binding.get("private_input_sha256") != support["private/input.json"]
             or not data.get("root_authorization") or data["root_authorization"] != binding.get("root_authorization")):
@@ -596,16 +589,16 @@ def advanced_host_report(path, current):
     actual_names = {p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file() and p.name != "evidence-hashes.json"}
     if not isinstance(evidence, dict) or set(evidence) != actual_names or any(sha(plain_file(directory, name)) != digest for name, digest in evidence.items()):
         raise ValueError("Host retained evidence inventory is incomplete or tampered")
-    spec = importlib.util.spec_from_file_location("verified_advanced_host", BASE / "advanced_host.py")
+    spec = importlib.util.spec_from_file_location("verified_advanced_host", pin.base / "advanced_host.py")
     host = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(host)
-    private = read_json(BASE / "private/input.json")
+    private = read_json(pin.base / "private/input.json")
     redactor = host.Redactor(private)
     if any(redactor.hits(plain_file(directory, name).read_bytes()) for name in evidence):
         raise ValueError("Host retained outputs contain disallowed private data")
-    expectations = read_json(BASE / "expectations.json")
+    expectations = read_json(pin.base / "expectations.json")
     checked_report_version(expectations, binding)
-    prepared = read_json(BASE / "prepared.json")
+    prepared = read_json(pin.base / "prepared.json")
     if (prepared.get("expectations_sha256") != support["expectations.json"]
             or prepared.get("private_input_sha256") != support["private/input.json"]
             or prepared.get("model_conversations_started") != 0
@@ -619,7 +612,7 @@ def advanced_host_report(path, current):
     records = {role: read_json(plain_file(directory, role + ".command.json")) for role in ROLES}
     wire_by_label = {label: rows(plain_file(directory, label + ".wire.jsonl")) for label in LABELS}
     processes, probes = validate_lifetimes(directory, records, wire_by_label)
-    support.update(authorization_support(directory, data, binding))
+    support.update(authorization_support(directory, data, binding, pin))
     for role in ROLES:
         events = rows(plain_file(directory, role + ".stdout.jsonl"))
         raw = raw_stdout(events, records[role], redactor, role=role, require_current=True)
@@ -631,7 +624,7 @@ def advanced_host_report(path, current):
         if launch.get("environment_binding") != {"PYTHONPATH": str(ROOT), "KNOWLEDGEOS_STATE_DIR": str(directory / "gate-state"), "PYTHONDONTWRITEBYTECODE": "1"}:
             raise ValueError("Host child does not bind the exact checkout and isolated state")
     host_identity = data.get("host", {})
-    host_executable = checked_host_version(host_identity, records["host-version"], rows(directory / "host-version.stdout.jsonl"), redactor)
+    host_executable = checked_host_version(host_identity, records["host-version"], rows(directory / "host-version.stdout.jsonl"), redactor, pin)
     generated = tomllib.loads(plain_file(directory, "generated-config.toml").read_text(encoding="utf-8"))
     server = generated.get("mcp_servers", {}).get("knowledgeos", {})
     interpreter, server_args = source_server(directory, server)
@@ -667,7 +660,7 @@ def advanced_host_report(path, current):
         config_path = plain_file(project, ".codex/config.toml")
         config = tomllib.loads(config_path.read_text(encoding="utf-8"))
         profile_server = config.get("mcp_servers", {}).get("knowledgeos", {})
-        proxy_args = ["-B", "-P", str(BASE / "advanced_host.py"), "--proxy", str(directory / (label + ".wire.jsonl")), str(BASE / "private/input.json"), "--", interpreter, *server_args]
+        proxy_args = ["-B", "-P", str(pin.base / "advanced_host.py"), "--proxy", str(directory / (label + ".wire.jsonl")), str(pin.base / "private/input.json"), "--", interpreter, *server_args]
         if (set(config) != {"mcp_servers"} or set(config["mcp_servers"]) != {"knowledgeos"}
                 or profile_server != {**server, "command": interpreter, "args": proxy_args, "env": {**server["env"], "KNOWLEDGEOS_STATE_DIR": str(directory / "gate-state"), "PYTHONDONTWRITEBYTECODE": "1"}}
                 or launch.get("profile") != str(config_path) or launch.get("profile_sha256") != sha(config_path)
@@ -680,7 +673,7 @@ def advanced_host_report(path, current):
         if record["command"] != argv or record["cwd"] != str(project) or record["stdin_sha256"] != hashlib.sha256(prompt["text"].replace("{private_segment}", private["segment"]).encode("utf-8")).hexdigest():
             raise ValueError("Actual host argv, literal prompt or profile location differs")
         freeze = read_json(plain_file(directory, label + ".freeze.json"))
-        if (freeze.get("manifest") != str(FREEZE) or freeze.get("manifest_sha256") != FROZEN_SHA256 or freeze.get("source_input_count") != 102
+        if (freeze.get("manifest") != str(pin.freeze) or freeze.get("manifest_sha256") != pin.frozen_sha256 or freeze.get("source_input_count") != len(product)
                 or freeze.get("product_hashes") != product or type(freeze.get("observed_ns")) is not int or freeze["observed_ns"] > launch["started_ns"]):
             raise ValueError("Host chat lacks the complete original before-launch product freeze check")
         events = rows(plain_file(directory, label + ".stdout.jsonl"))
@@ -690,7 +683,7 @@ def advanced_host_report(path, current):
         if starts[0].get("command") != [interpreter, *server_args] or starts[0].get("cwd") != str(project):
             raise ValueError("Actual wire server was not the configured source subprocess")
         initialize = [row["message"] for row in wire if row.get("kind") == "request" and row.get("message", {}).get("method") == "initialize"]
-        if len(initialize) != 1 or initialize[0].get("params", {}).get("clientInfo", {}).get("version") != "0.163.0":
+        if len(initialize) != 1 or initialize[0].get("params", {}).get("clientInfo", {}).get("version") != pin.client_version:
             raise ValueError("Actual MCP client identity differs from the genuine host")
         identifiers = [row["message"]["thread_id"] for row in events if row["message"].get("type") == "thread.started"]
         if len(identifiers) != 1 or identifiers[0] in thread_ids or not identifiers[0] or sum(row["message"].get("type") == "turn.completed" for row in events) != 1:
@@ -751,4 +744,4 @@ def advanced_host_report(path, current):
         checks[identifier] = {"id": identifier, "verdict": row["verdict"], "expected": items[row["id"]]["expected"], "observed": {"regraded_outcome": row, "checks": canonical(graded["checks"]), "thread_ids": sorted(thread_ids), "session_ids": sorted(session_ids), "lifetime_probes": probes}, "evidence": sorted(evidence)}
     if set(checks) != {value[0] for value in REQUIREMENTS.values()}:
         raise ValueError("Host adapter requires all four complete existing outcomes")
-    return {"path": str(path), "report_sha256": sha(path), "scope": "real_host", "producer": PRODUCER, "producer_sha256": support["advanced_host.py"], "adapter_sha256": sha(__file__), "host": host_identity, "transcript_files": evidence, "support_hashes": {str(BASE / name): digest for name, digest in support.items() if name != "private/input.json"}, "offline_regrade": {"original_report": str(path), "original_report_sha256": sha(path), "new_model_calls": 0, "method": "Independent retained raw envelopes, source snapshots, signed policy and exact command lifetimes; current trusted literal grader"}, "checks": checks}
+    return {"path": str(path), "report_sha256": sha(path), "scope": "real_host", "producer": PRODUCER, "producer_sha256": support["advanced_host.py"], "adapter_sha256": sha(__file__), "host": host_identity, "transcript_files": evidence, "support_hashes": {**{str(pin.base / name): digest for name, digest in support.items() if name != "private/input.json"}, str(pin.base / freeze_binding.FREEZE_NAME): pin.frozen_sha256, str(pin.base / freeze_binding.SEAL_NAME): pin.seal_sha256, str(pin.pin_path): pin.pin_sha256, str(Path(freeze_binding.__file__).absolute()): sha(freeze_binding.__file__)}, "offline_regrade": {"original_report": str(path), "original_report_sha256": sha(path), "new_model_calls": 0, "method": "Independent retained raw envelopes, source snapshots, signed policy and exact command lifetimes; current trusted literal grader"}, "checks": checks}

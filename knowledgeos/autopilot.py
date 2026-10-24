@@ -396,6 +396,12 @@ def _breathe(
     # `session_brief.md` used to be written here and nothing ever read it: a dead file
     # described in the docs as a feature. The payload itself is the brief — it goes
     # straight back to the agent that asked for it.
+    from knowledgeos.memory import STARTUP_CONTEXT_BYTES, _context_bytes
+
+    allowance = STARTUP_CONTEXT_BYTES - _context_bytes(dict(payload, context={}))
+    payload["context"] = api._bound_startup_context(ctx, max_bytes=allowance)
+    if payload["context"].get("error"):
+        payload["error"] = payload["context"]["error"]
     return payload
 
 

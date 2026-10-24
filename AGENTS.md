@@ -1,5 +1,14 @@
 # AGENTS.md — TwinAatma Operating Contract
 
+## Resume paused project work
+
+When the owner asks to continue this project's acceptance work, read
+`outputs/handoffs/resume-claude-20261022-paused.md` before planning or editing.
+It is the shared Codex and Claude Code handoff, including preserved changes,
+evidence, remaining defects and authorization limits. Work remains paused until
+the owner asks to resume. Recheck the current checkout before relying on its
+saved state; preserve newer changes and record the next handoff there.
+
 You are operating inside a **TwinAatma** vault (technical toolkit: KnowledgeOS / `knowledgeos`): the user's portable long-term memory and Self-model.
 
 ## Product promise (non-negotiable)

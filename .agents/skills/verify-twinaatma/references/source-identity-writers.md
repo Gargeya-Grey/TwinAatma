@@ -23,6 +23,19 @@ commands and traced child processes. A manifest alias may detach only when the
 original Self inode and bytes remain unchanged, the new manifest is distinct, the
 exact expected link count is observed and the I/O audit finds no identity write.
 
+Interrupted-write cases require a nonzero public-command exit and the actual
+injected-fault line in stderr. Preserved bytes after an operation that performed
+no write are insufficient. The setup fault starts with a stale synthetic server
+binding so setup must replace it; retry must repair that binding while retaining
+unrelated host configuration. Keep failed fixture preparations and rejected
+grades alongside the fresh replay.
+
+Ordinary public scripts must finish with exit 0; the retired onboarding wrapper
+must refuse with exit 1. Preserve command output and snapshots before rejecting
+an unexpected status. A Bash wrapper that exits before its observed Python child
+starts supplies no wrapper proof. Shipped shell files use LF endings, enforced
+by `.gitattributes`; verify them through native Bash rather than a syntax check.
+
 The cumulative scorer also requires complete current export, generated-output,
 census, maintenance, Git hook, validation, core refusal, index/lock/fault recovery
 and attributed-learning reports. Both focused reports are repeatable arguments.

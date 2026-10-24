@@ -22,9 +22,9 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
     def quality_fixture(self):
         self.fixture_index += 1
         directory = self.directory / ("quality-" + str(self.fixture_index))
-        data = self.base_report(directory, "verify-twinaatma.quality/v1", "quality.py", "evaluation source-only startup MCP retrieval synthetic scorer control")
+        data = self.base_report(directory, metric.QUALITY_PRODUCER, "quality.py", "evaluation source-only startup MCP retrieval synthetic scorer control")
         corpus, notes, summary = metric.quality_corpus()
-        data.update(corpus_path="tests/fixtures/quality-v1.json", corpus_sha256="787de4674bb0a51fceee87acb7ee7e9b8872068e1fab8af24de3e729bcbac379",
+        data.update(corpus_path=metric.QUALITY_CORPUS, corpus_id=metric.QUALITY_CORPUS_ID, corpus_sha256=metric.QUALITY_CORPUS_SHA256,
                     corpus_summary=summary, cases=[], binding_checks=[], capture_policy_status="UNAPPROVED", execution_complete=True)
         fixtures = {}
         for case in corpus["cases"]:
@@ -67,7 +67,7 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
                 "observed": {"complete_inventory_preserved": True, "literal_hint_used": True, "session_id": payload["session_id"], "fresh_process_and_vault": True}}
             data["cases"].append(row)
             data["binding_checks"].append({"id": label, "copied_product_unchanged": True, "all_frozen_notes_unchanged": True, "synthetic_self_unchanged": True})
-        manifest = {key: data[key] for key in ("producer", "producer_sha256", "support_sha256", "product_hashes", "corpus_path", "corpus_sha256", "corpus_summary")}
+        manifest = {key: data[key] for key in ("producer", "producer_sha256", "support_sha256", "product_hashes", "corpus_path", "corpus_id", "corpus_sha256", "corpus_summary")}
         manifest.update(frozen_at="2026-10-19T12:00:00+00:00", frozen_before_first_product_invocation=True, complete_note_inventory=notes,
             case_registry=[case["id"] for case in corpus["cases"]], fixtures=fixtures, held_out_status="Process held out; synthetic control only",
             capture_policy_status="UNAPPROVED", acceptance_credit_awarded=False)
@@ -95,7 +95,7 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
         responses = [json.loads(line) for line in stdout_path.read_text(encoding="utf-8").splitlines()]
         responses[-1]["result"]["content"][0]["text"] = json.dumps(payload, ensure_ascii=False)
         stdout_path.write_text("".join(json.dumps(response, ensure_ascii=False) + "\n" for response in responses), encoding="utf-8")
-        corpus = metric.read_json(ROOT / "tests/fixtures/quality-v1.json")
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
         data["cases"][index].update(metric.quality_case(corpus["cases"][index], payload))
         self.recompute(data)
         self.refresh(path, data)
@@ -105,10 +105,10 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
         report = metric.quality_report(path, self.current)
         passed = {item["id"] for item in metric.read_json(metric.RUBRIC)["outcomes"] if metric.outcome(item, [report])["verdict"] == "PASS"}
         self.assertEqual(passed, {"QUALITY.fixed_corpus", "QUALITY.retrieval_target"})
-        self.assertEqual(data["metrics"]["combined"]["critical_sources"], {"numerator": 10, "denominator": 10, "ratio": 1.0})
-        self.assertEqual(data["metrics"]["combined"]["critical_claims"], {"numerator": 16, "denominator": 16})
-        self.assertEqual(data["metrics"]["combined"]["noncritical_sources"], {"numerator": 31, "denominator": 31, "ratio": 1.0})
-        self.assertEqual(data["metrics"]["combined"]["empty_source_cases"], 6)
+        self.assertEqual(data["metrics"]["combined"]["critical_sources"], {'numerator': 44, 'denominator': 44, 'ratio': 1.0})
+        self.assertEqual(data["metrics"]["combined"]["critical_claims"], {'numerator': 78, 'denominator': 78})
+        self.assertEqual(data["metrics"]["combined"]["noncritical_sources"], {'numerator': 97, 'denominator': 97, 'ratio': 1.0})
+        self.assertEqual(data["metrics"]["combined"]["empty_source_cases"], 14)
 
     def test_actual_critical_quote_failure_keeps_corpus_pass_and_retrieval_fail(self):
         path, data = self.quality_fixture()
@@ -116,11 +116,11 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
         report = metric.quality_report(path, self.current)
         self.assertEqual(report["checks"]["quality.fixed_corpus"]["verdict"], "PASS")
         self.assertEqual(report["checks"]["quality.retrieval_target"]["verdict"], "FAIL")
-        self.assertEqual(data["metrics"]["combined"]["critical_sources"]["numerator"], 10)
-        self.assertEqual(data["metrics"]["combined"]["critical_claims"]["numerator"], 14)
+        self.assertEqual(data["metrics"]["combined"]["critical_sources"]["numerator"], 44)
+        self.assertEqual(data["metrics"]["combined"]["critical_claims"]["numerator"], 76)
 
     def test_rank_eight_counts_and_rank_nine_does_not(self):
-        corpus = metric.read_json(ROOT / "tests/fixtures/quality-v1.json")
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
         case = corpus["cases"][3]
         source = case["expected_sources"][0]
         target = {"path": source["path"], "excerpt": "\n".join(claim["quote"] for claim in source["claims"])}
@@ -156,6 +156,8 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
         for change in (lambda value: value["cases"].pop(), lambda value: value["cases"][0].update(split="held_out"),
                        lambda value: value["metrics"]["combined"]["critical_sources"].update(numerator=999),
                        lambda value: value.update(execution_complete=False), lambda value: value.update(corpus_sha256="0" * 64),
+                       lambda value: value.update(corpus_id="wrong-corpus"),
+                       lambda value: value["cases"].pop(0),
                        lambda value: value["checks"][0].update(expected="")):
             changed = copy.deepcopy(data)
             change(changed)
@@ -222,7 +224,7 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
             metric.quality_report(path, self.current)
 
     def test_empty_sources_never_become_positive_recall_or_human_grounding(self):
-        corpus = metric.read_json(ROOT / "tests/fixtures/quality-v1.json")
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
         case = next(case for case in corpus["cases"] if not case["expected_sources"])
         payload = {"context": {"task_hint": case["task_hint"], "relevant": {"ranked": [{"path": "Unrelated.md"}]}}, "session_id": "synthetic"}
         row = metric.quality_case(case, payload)
@@ -234,8 +236,52 @@ class QualityScoreTests(ObservationFixtures, unittest.TestCase):
         self.assertEqual(metrics["noncritical_sources"]["denominator"], 0)
         self.assertFalse(metrics["retrieval_target_met"])
 
+    def test_pure_corpus_rejects_legacy_relabeling_and_fresh_case_loss(self):
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
+        for change in (
+            lambda value: value["cases"][0]["expected_sources"][0]["claims"][0].update(text="Changed legacy claim label"),
+            lambda value: value["cases"][0].update(task_hint="Changed legacy prompt"),
+            lambda value: value["notes"][0].update(title="Changed legacy note label"),
+            lambda value: value["cases"][36].update(task_hint="Changed retired v2 prompt"),
+            lambda value: value["notes"][38].update(title="Changed retired v2 note label"),
+            lambda value: value["cases"].pop(0),
+            lambda value: value["cases"].pop(),
+            lambda value: value["splits"]["held_out"].pop(),
+            lambda value: value["cases"][72].update(split="development"),
+        ):
+            changed = copy.deepcopy(corpus)
+            change(changed)
+            with self.assertRaises(ValueError):
+                metric.validate_quality_corpus(changed)
+        with patch.object(metric, "sha", return_value="0" * 64), self.assertRaisesRegex(ValueError, "hash changed"):
+            metric.quality_corpus()
+
+    def test_fresh_critical_source_miss_fails_held_out_target(self):
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
+        rows = []
+        for case in corpus["cases"]:
+            ranked = [{"path": source["path"], "excerpt": "\n".join(claim["quote"] for claim in source["claims"])}
+                      for source in case["expected_sources"]]
+            payload = {"context": {"task_hint": case["task_hint"], "relevant": {"ranked": ranked}}, "session_id": "synthetic-" + case["id"]}
+            rows.append(metric.quality_case(case, payload))
+        self.assertTrue(all(value["retrieval_target_met"] for value in metric.quality_metrics(rows).values()))
+        index, case = next((index, case) for index, case in enumerate(corpus["cases"]) if case["split"] == "held_out"
+                           and any(source["critical"] for source in case["expected_sources"]))
+        missing = next(source["path"] for source in case["expected_sources"] if source["critical"])
+        ranked = [{"path": source["path"], "excerpt": "\n".join(claim["quote"] for claim in source["claims"])}
+                  for source in case["expected_sources"] if source["path"] != missing]
+        payload = {"context": {"task_hint": case["task_hint"], "relevant": {"ranked": ranked}}, "session_id": "synthetic-miss"}
+        rows[index] = metric.quality_case(case, payload)
+        result = metric.quality_metrics(rows)
+        self.assertEqual(rows[index]["verdict"], "FAIL")
+        self.assertTrue(result["development"]["retrieval_target_met"])
+        self.assertFalse(result["held_out"]["retrieval_target_met"])
+        self.assertFalse(result["combined"]["retrieval_target_met"])
+        self.assertEqual(result["held_out"]["critical_sources"], {'numerator': 13, 'denominator': 14, 'ratio': 0.9285714285714286})
+        self.assertEqual(result["held_out"]["noncritical_sources"]["ratio"], 1.0)
+
     def test_corpus_label_tamper_is_rejected_independently_of_declared_digest(self):
-        corpus = metric.read_json(ROOT / "tests/fixtures/quality-v1.json")
+        corpus = metric.read_json(ROOT / metric.QUALITY_CORPUS)
         for change in (lambda value: value.update(labels_observed_from_product=True),
                        lambda value: value["cases"][0]["expected_sources"][0]["claims"][0].update(quote="Unwritten evidence"),
                        lambda value: value["evaluation_contract"].update(noncritical_expected_source_target=0.8),

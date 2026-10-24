@@ -71,7 +71,8 @@ RESTORE_STEPS = ("setup-host", "doctor-1", "pending-1", "validate-1", "host-mcp-
 TOOLS = ("memory_session_start", "memory_search", "memory_get_note", "memory_related", "memory_capture",
          "memory_propose_self_update", "memory_list_self_proposals", "memory_accept_self_update", "memory_session_end")
 TOOLING = {"tool-create-venv", "tool-install", "tool-import-origin"}
-DERIVED = ("knowledge_index.db", ".knowledgeos/", ".codex/")
+DERIVED = ("knowledge_index.db", ".knowledgeos/", ".codex/", ".knowledgeos-init.json",
+           ".cursor/hooks.json", ".cursor/mcp.json", "mcp.cursor.json")
 SECRET_NAME = re.compile(r"(?i)token|secret|password|credential|api[_-]?key|_key$|^actions_|^openai|^anthropic")
 # The owner's device-local policy (21 October 2026): another device refuses the old proposal with a hint to propose again.
 # A bare mention of the signing key is a cause, not an instruction, so these two patterns require an instruction.
@@ -102,7 +103,8 @@ def inventory(root):
 
 
 def is_derived(relative):
-    return any(relative == prefix or relative.startswith(prefix) for prefix in DERIVED)
+    return relative.startswith("knowledge_index.db-") or any(
+        relative == prefix or (prefix.endswith("/") and relative.startswith(prefix)) for prefix in DERIVED)
 
 
 def content(files):
@@ -391,6 +393,7 @@ def case_valid_again(a, b, facts):
         "listed_open_again": opened == [old] and untrusted == [],
         "pending_lists_it": finished(pending) and pending["exit_code"] == 0 and old in pending_text,
         "doctor_lists_it_as_waiting": finished(doctor) and "[OK] Proposal ledger is signed (1 entries" in doctor_text and old in waiting,
+        "doctor_ready_after_restore": command_ok(b, "doctor-2") and "[ERROR]" not in doctor_text,
         "ledger_rows_kept": {r["sha256"] for r in base} <= {r["sha256"] for r in rows},
         "still_draft_not_applied": [(r["proposal"], r["status"], r["applied"]) for r in rows] == [(old, "draft", False)],
         "self_unchanged": b.snap(4)["self_sha256"] == a.snap(1)["self_sha256"],
@@ -860,7 +863,7 @@ def observe_restore(origin_dir, directory, vault):
     errors = {label: [line.strip() for line in b.stdout(label).splitlines() if "[ERROR]" in line] for label in ("doctor-1", "doctor-2")}
     return {"doctor_exit_codes": {label: b.command(label).get("exit_code") for label in ("doctor-1", "doctor-2")},
             "doctor_error_lines": errors, "vault_files_still_naming_device_a_paths": stale,
-            "note": "Reported, not graded: init writes Cursor files with absolute device paths, and they stay stale after a restore"}
+            "note": "Auxiliary observations; doctor readiness after restoring the signing state is also a graded condition"}
 
 
 def frozen_before_calls(directory):

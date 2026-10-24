@@ -15,7 +15,7 @@ sys.path.insert(0, str(SCRIPTS))
 spec = importlib.util.spec_from_file_location("quality_proof", SCRIPTS / "quality.py")
 proof = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(proof)
-CORPUS = json.loads((ROOT / "tests/fixtures/quality-v1.json").read_text(encoding="utf-8"))
+CORPUS = json.loads((ROOT / "tests/fixtures/quality-v3.json").read_text(encoding="utf-8"))
 
 
 def payload(case, sources, missing_quotes=()):
@@ -30,12 +30,42 @@ class QualityVerifierTests(unittest.TestCase):
     def test_frozen_corpus_has_literal_diverse_split_inventory(self):
         observed = proof.validate_corpus(CORPUS)
         self.assertEqual((observed["cases"], observed["notes"], observed["roles"]),
-                         (36, 38, {"relevant": 26, "distractor": 12}))
+                         (108, 126, {'relevant': 88, 'distractor': 38}))
         self.assertEqual(observed["splits"], {
-            "development": {"cases": 24, "empty_source_cases": 2, "critical_sources": 6,
-                            "critical_claims": 9, "noncritical_sources": 23},
-            "held_out": {"cases": 12, "empty_source_cases": 4, "critical_sources": 4,
-                         "critical_claims": 7, "noncritical_sources": 8}})
+            'development': {'cases': 72, 'empty_source_cases': 10, 'noncritical_sources': 75, 'critical_sources': 30, 'critical_claims': 36},
+            'held_out': {'cases': 36, 'empty_source_cases': 4, 'critical_sources': 14, 'critical_claims': 42, 'noncritical_sources': 22}})
+
+    def test_all_original_cases_and_notes_remain_immutable_regressions(self):
+        original_path = ROOT / "tests/fixtures/quality-v1.json"
+        self.assertEqual(hashlib.sha256(original_path.read_bytes()).hexdigest(),
+                         "787de4674bb0a51fceee87acb7ee7e9b8872068e1fab8af24de3e729bcbac379")
+        prior_path = ROOT / "tests/fixtures/quality-v2.json"
+        self.assertEqual(hashlib.sha256(prior_path.read_bytes()).hexdigest(),
+                         "8ec5e0e902c7fbdac2e81288a25a5d0c380a99b820217a67f052da178b6567c6")
+        prior = json.loads(prior_path.read_text(encoding="utf-8"))
+        self.assertEqual(CORPUS["notes"][:82], prior["notes"])
+        self.assertEqual(CORPUS["cases"][:72], [dict(case, split="development") for case in prior["cases"]])
+        self.assertEqual(CORPUS["splits"]["development"], [case["id"] for case in prior["cases"]])
+        self.assertEqual(hashlib.sha256(proof.CORPUS.read_bytes()).hexdigest(), proof.CORPUS_SHA256)
+
+    def test_changed_old_labels_and_missing_fresh_cases_are_rejected(self):
+        mutations = [
+            lambda data: data["cases"][0]["expected_sources"][0]["claims"][0].update(text="Changed legacy claim label"),
+            lambda data: data["cases"][0].update(task_hint="Changed legacy prompt"),
+            lambda data: data["notes"][0].update(title="Changed legacy note label"),
+            lambda data: data["cases"][36].update(task_hint="Changed retired v2 prompt"),
+            lambda data: data["notes"][38].update(title="Changed retired v2 note label"),
+            lambda data: data["cases"].pop(0),
+            lambda data: data["cases"].pop(),
+            lambda data: data["splits"]["held_out"].pop(),
+            lambda data: data["cases"][72].update(split="development"),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(index=index):
+                data = copy.deepcopy(CORPUS)
+                mutate(data)
+                with self.assertRaises(ValueError):
+                    proof.validate_corpus(data)
 
     def test_invalid_labels_and_changed_contract_fail_before_product_use(self):
         mutations = [
@@ -108,7 +138,7 @@ class QualityVerifierTests(unittest.TestCase):
 
     def test_development_and_held_out_metrics_are_separate(self):
         development = CORPUS["cases"][3]
-        held_out = CORPUS["cases"][25]
+        held_out = dict(development, id="synthetic-held-out", split="held_out")
         rows = [proof.grade_case(development, payload(development, ["Preferences/Food.md"])),
                 proof.grade_case(held_out, payload(held_out, []))]
         metrics = proof.aggregate(rows)
@@ -129,7 +159,7 @@ class QualityVerifierTests(unittest.TestCase):
         self.assertEqual(metrics["retrieval_target_met"], False)
 
     def test_all_distractors_must_exist_before_any_startup_command(self):
-        base = ROOT / "work/gc-artifacts/.knowledgeos/quality-proof-20261019/controls"
+        base = ROOT / "work/gc-artifacts/.knowledgeos/retrieval-20261023/quality-v3-proof/unit-fixtures"
         base.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=base) as folder:
             vault = Path(folder) / "vault"
@@ -141,7 +171,7 @@ class QualityVerifierTests(unittest.TestCase):
             run = object.__new__(proof.QualityRun)
             run.expected_notes = {note["path"]: {"sha256": hashlib.sha256(note["content"].encode("utf-8")).hexdigest(),
                 "size": len(note["content"].encode("utf-8")), "role": note["role"]} for note in CORPUS["notes"]}
-            self.assertEqual(len(run.verify_notes(vault)), 38)
+            self.assertEqual(len(run.verify_notes(vault)), 126)
             distractor = next(note for note in CORPUS["notes"] if note["role"] == "distractor")
             (vault / distractor["path"]).unlink()
             run.prepared = True

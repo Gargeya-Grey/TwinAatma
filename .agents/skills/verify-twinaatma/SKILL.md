@@ -87,6 +87,11 @@ The complete current wheel and executable pair can verify only the existing
 `PORT.same_device_move` outcome. A native protocol call does not prove a model chat,
 clean-device restore or independent approval.
 
+The single nine-chat host batch for a new product freeze has its own recipe:
+[host batch](references/host-batch.md). `host_batch.py prepare` makes every zero-model
+preparation and stops before the first model call. `host_batch.py chats --allow-model-calls`
+runs the chats once and refuses without a human authorization bound to the freeze.
+
 ## Source data preservation
 
 Follow [the data-preservation recipe](references/data-preservation.md) for complete
@@ -101,7 +106,8 @@ They prove source behavior only. Native link setup failures remain unresolved.
 
 Use [the identity and quality source recipe](references/source-identity-quality.md)
 for `identity.py --journey unknown`, `identity.py --journey canonical` and the
-frozen 36-case `quality.py` startup evaluation. These public-process checks keep
+frozen 108-case `quality.py` startup evaluation (all 72 prior regressions plus
+36 independently authored held-out cases). These public-process checks keep
 owner approval, host answers, privacy and representative use as separate gates.
 A valid corpus can pass while retrieval fails.
 

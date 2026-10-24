@@ -114,10 +114,18 @@ IDENTITY_UNKNOWNS = {
     "anti_goals": "Unknown. No owner-confirmed anti-goals recorded yet.",
     "active_bets": "Unknown. No owner-confirmed strategic bets recorded yet.",
 }
-QUALITY_PRODUCER = "verify-twinaatma.quality/v1"
-QUALITY_CORPUS = "tests/fixtures/quality-v1.json"
-QUALITY_CORPUS_SHA256 = "787de4674bb0a51fceee87acb7ee7e9b8872068e1fab8af24de3e729bcbac379"
-QUALITY_CASE_IDS = tuple("quality-v1-" + str(index).zfill(3) for index in range(1, 37))
+QUALITY_PRODUCER = "verify-twinaatma.quality/v3"
+QUALITY_CORPUS = "tests/fixtures/quality-v3.json"
+QUALITY_CORPUS_SHA256 = "b820bb51be43da5138afd47720e8254cc64c1ac4b0bd406dedfff531e9c9c358"
+QUALITY_CORPUS_ID = "quality-v3-20261023"
+QUALITY_LEGACY_CASE_IDS = (tuple("quality-v1-" + str(index).zfill(3) for index in range(1, 37))
+                   + tuple("fresh-held-" + str(index).zfill(2) for index in range(1, 37)))
+QUALITY_HELD_OUT_CASE_IDS = ('next-held-01', 'next-held-02', 'next-held-03', 'next-held-04', 'next-held-05', 'next-held-06', 'next-held-07', 'next-held-08', 'next-held-09', 'next-held-10', 'next-held-11', 'next-held-12', 'next-held-13', 'next-held-14', 'next-held-15', 'next-held-16', 'next-held-17', 'next-held-18', 'next-held-19', 'next-held-20', 'next-held-21', 'next-held-22', 'next-held-23', 'next-held-24', 'next-held-25', 'next-held-26', 'next-held-27', 'next-held-28', 'next-held-29', 'next-held-30', 'next-held-31', 'next-held-32', 'next-held-33', 'next-held-34', 'next-held-35', 'next-held-36')
+QUALITY_NOTE_COUNT = 126
+QUALITY_NOTE_ROLES = {'relevant': 88, 'distractor': 38}
+QUALITY_LEGACY_CASES_SHA256 = "3f49556d80637c6676c574f32f5252a62ce265e8e2f352e025398c66959b8331"
+QUALITY_LEGACY_NOTES_SHA256 = "29acfa2768a877a2d3ba9df32b87cd840943d8e91b74c9fe7839d41f238348a8"
+QUALITY_CASE_IDS = QUALITY_LEGACY_CASE_IDS + QUALITY_HELD_OUT_CASE_IDS
 QUALITY_SPLITS = ("development", "held_out")
 QUALITY_SELF_SHA256 = "b169fd580ef507cc3e1e2655eb6b67b19a9a5b00420f220f46b7e470645598c1"
 ADAPTER_REQUIREMENTS["identity_producers"] = {producer: {"file": "identity.py", "support": ["data_preservation.py"],
@@ -125,6 +133,8 @@ ADAPTER_REQUIREMENTS["identity_producers"] = {producer: {"file": "identity.py", 
     for producer, spec in IDENTITY_PRODUCERS.items()}
 ADAPTER_REQUIREMENTS["quality_producer"] = {"producer": QUALITY_PRODUCER, "file": "quality.py", "support": ["data_preservation.py"],
     "cases": list(QUALITY_CASE_IDS), "corpus": QUALITY_CORPUS, "corpus_sha256": QUALITY_CORPUS_SHA256,
+    "corpus_id": QUALITY_CORPUS_ID, "notes": QUALITY_NOTE_COUNT,
+    "splits": {"development": list(QUALITY_LEGACY_CASE_IDS), "held_out": list(QUALITY_HELD_OUT_CASE_IDS)},
     "source_top_k": 8, "critical_source_target": 1, "critical_claim_target": 1, "noncritical_source_target": 0.9}
 ADAPTER_REQUIREMENTS["outcomes"].update({spec["outcome"]: ["identity." + spec["journey"] + ".complete"]
                                            for spec in IDENTITY_PRODUCERS.values()})
@@ -1390,8 +1400,11 @@ def quality_corpus():
     path = ROOT / QUALITY_CORPUS
     if sha(path) != QUALITY_CORPUS_SHA256:
         raise ValueError("Quality frozen corpus hash changed")
-    corpus = read_json(path)
-    if (corpus.get("schema_version") != "twinaatma.quality-corpus/v1" or corpus.get("corpus_id") != "quality-v1-20261019"
+    return validate_quality_corpus(read_json(path))
+
+
+def validate_quality_corpus(corpus):
+    if (corpus.get("schema_version") != "twinaatma.quality-corpus/v1" or corpus.get("corpus_id") != QUALITY_CORPUS_ID
             or corpus.get("frozen_before_product_observation") is not True or corpus.get("labels_observed_from_product") is not False
             or not isinstance(corpus.get("label_provenance"), str) or not corpus["label_provenance"].strip()
             or corpus.get("synthetic_subject", {}).get("all_people_and_projects_are_fictional") is not True
@@ -1399,17 +1412,22 @@ def quality_corpus():
         raise ValueError("Quality corpus lacks pre-observation synthetic label provenance")
     contract = corpus.get("evaluation_contract", {})
     required = {"fixed_rubric_id": "twinaatma-ideal-v1", "fixed_outcome_count": 54, "source_top_k": 8,
-                "critical_expected_source_target": 1, "noncritical_expected_source_target": 0.9}
+                "critical_expected_source_target": 1, "critical_expected_claim_target": 1, "noncritical_expected_source_target": 0.9}
     if any(contract.get(name) != value or isinstance(contract.get(name), bool) for name, value in required.items()):
         raise ValueError("Quality corpus changed the fixed acceptance targets")
     policy = contract.get("capture_policy", {})
     if policy.get("status") != "UNAPPROVED" or policy.get("release_acceptance") != "BLOCKED":
         raise ValueError("Quality corpus cannot approve a privacy policy")
     notes, cases, splits = corpus.get("notes"), corpus.get("cases"), corpus.get("splits")
-    if (not isinstance(notes, list) or len(notes) != 38 or not isinstance(cases, list)
+    if (not isinstance(notes, list) or len(notes) != QUALITY_NOTE_COUNT or not isinstance(cases, list)
+            or not all(isinstance(case, dict) for case in cases)
             or [case.get("id") for case in cases] != list(QUALITY_CASE_IDS)
-            or splits != {"development": list(QUALITY_CASE_IDS[:24]), "held_out": list(QUALITY_CASE_IDS[24:])}):
+            or splits != {"development": list(QUALITY_LEGACY_CASE_IDS), "held_out": list(QUALITY_HELD_OUT_CASE_IDS)}):
         raise ValueError("Quality corpus lost its complete notes, cases or authored split inventory")
+    canonical = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+    if (canonical(cases[:72]) != QUALITY_LEGACY_CASES_SHA256
+            or canonical(notes[:82]) != QUALITY_LEGACY_NOTES_SHA256):
+        raise ValueError("Quality legacy cases and notes changed beyond retiring their split to development")
     by_path, expected = {}, {}
     for note in notes:
         name, content = note.get("path"), note.get("content")
@@ -1424,7 +1442,7 @@ def quality_corpus():
         expected[name] = {"sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw), "role": note["role"]}
     categories, totals = set(), {split: Counter() for split in QUALITY_SPLITS}
     for case in cases:
-        split = "development" if case["id"] in QUALITY_CASE_IDS[:24] else "held_out"
+        split = "development" if case["id"] in QUALITY_LEGACY_CASE_IDS else "held_out"
         if (case.get("split") != split or type(case.get("critical")) is not bool
                 or any(not isinstance(case.get(name), str) or not case[name].strip() for name in ("task_hint", "question", "conversation_input"))
                 or not isinstance(case.get("categories"), list) or not case["categories"]
@@ -1455,7 +1473,7 @@ def quality_corpus():
     diverse = {"natural_hint", "paraphrase", "contextual_preference", "changed_fact", "multilingual", "ambiguous_names",
                "irrelevant_chatter", "unknown", "unsupported_personal_question"}
     roles = dict(Counter(note["role"] for note in notes))
-    if not diverse <= categories or roles != {"relevant": 26, "distractor": 12}:
+    if not diverse <= categories or roles != QUALITY_NOTE_ROLES:
         raise ValueError("Quality corpus lacks required diversity and distractors")
     summary = {"cases": len(cases), "notes": len(notes), "roles": roles, "categories": sorted(categories),
                "splits": {key: dict(value) for key, value in totals.items()}}
@@ -1542,7 +1560,7 @@ def quality_report(path, current):
     directory = path.parent
     corpus, expected_notes, summary = quality_corpus()
     manifest = observed_json(directory, evidence, "run-manifest.json")
-    for field in ("producer", "producer_sha256", "support_sha256", "product_hashes", "corpus_path", "corpus_sha256", "corpus_summary"):
+    for field in ("producer", "producer_sha256", "support_sha256", "product_hashes", "corpus_path", "corpus_id", "corpus_sha256", "corpus_summary"):
         if data.get(field) != manifest.get(field):
             raise ValueError("Quality freeze manifest disagrees with actual report binding")
     try:
@@ -1550,7 +1568,8 @@ def quality_report(path, current):
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("Quality freeze manifest lacks an actual timestamp") from error
     if (manifest.get("frozen_before_first_product_invocation") is not True or frozen_at.tzinfo is None
-            or data.get("corpus_path") != QUALITY_CORPUS or data.get("corpus_sha256") != QUALITY_CORPUS_SHA256
+            or data.get("corpus_path") != QUALITY_CORPUS or data.get("corpus_id") != QUALITY_CORPUS_ID
+            or data.get("corpus_sha256") != QUALITY_CORPUS_SHA256
             or data.get("corpus_summary") != summary or manifest.get("complete_note_inventory") != expected_notes
             or manifest.get("case_registry") != list(QUALITY_CASE_IDS) or not isinstance(manifest.get("held_out_status"), str)
             or not manifest["held_out_status"].startswith("Process held out;") or data.get("execution_complete") is not True
@@ -1558,7 +1577,7 @@ def quality_report(path, current):
         raise ValueError("Quality run lacks its complete pre-observation frozen corpus and policy separation")
     cases = data.get("cases")
     if not isinstance(cases, list) or [row.get("id") for row in cases] != list(QUALITY_CASE_IDS):
-        raise ValueError("Quality run lacks its exact complete 36-case registry")
+        raise ValueError("Quality run lacks its exact complete 108-case registry")
     fixtures = manifest.get("fixtures")
     if not isinstance(fixtures, dict) or set(fixtures) != set(QUALITY_CASE_IDS):
         raise ValueError("Quality freeze manifest lacks all independent fixtures")
@@ -2810,7 +2829,7 @@ ADAPTER_REQUIREMENTS['extensions'] = {
            'module_sha256': sha(Path(__file__).with_name(spec['module'] + '.py'))
            if Path(__file__).with_name(spec['module'] + '.py').is_file() else None}
     for name, spec in EXTENSION_ADAPTERS.items()}
-ADAPTER_REQUIREMENTS['version'] = 'verify-twinaatma.adapters/v13'
+ADAPTER_REQUIREMENTS['version'] = 'verify-twinaatma.adapters/v15'
 
 
 def extension_reports(name, paths, current):

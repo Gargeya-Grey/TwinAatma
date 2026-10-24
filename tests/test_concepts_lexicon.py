@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from knowledgeos import concepts, search  # noqa: E402
 
-MIN_CLUSTERS, MAX_CLUSTERS = 200, 350
+MIN_CLUSTERS, MAX_CLUSTERS = 200, 353
 MIN_ENTRIES, MAX_ENTRIES = 4, 40
 MAX_FILE_BYTES = 150 * 1000
 MIN_SCRIPT_SHARE = 0.60

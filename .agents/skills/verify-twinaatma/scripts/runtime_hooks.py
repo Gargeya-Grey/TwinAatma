@@ -196,7 +196,9 @@ class HookRun(artifact.ArtifactRun):
             artifact.wheel_binding(self.artifact, self.sources)
             self.manifest_path = wheel_manifest(self.artifact, self.manifest, self.sources)
             environment = self.directory / "installed environment"
-            self.command("create-venv", [self.target, "-I", "-m", "venv", "--without-pip", environment], timeout=300)
+            # Retain a real interpreter file so native Windows can inspect a
+            # completed Linux fixture without following an LX reparse link.
+            self.command("create-venv", [self.target, "-I", "-m", "venv", "--copies", "--without-pip", environment], timeout=300)
             python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
             self.command("install", [sys.executable, "-I", "-m", "pip", "--python", python,
                                      "install", "--no-index", "--no-deps", self.artifact], timeout=300)

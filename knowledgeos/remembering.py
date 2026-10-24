@@ -382,11 +382,11 @@ class RememberingPolicy:
             return "credential_pattern"
         if _THIRD_PARTY.search(text) or _sensitive_third_party(text):
             return "third_party_pattern"
-        words = _words(text)
         expected = {}
         for record in self.state["forgotten"].values():
             for fp in record["fingerprints"]:
                 expected.setdefault(fp["words"], set()).add(fp["sha256"])
+        words = _words(text) if expected else []
         for width, digests in expected.items():
             for offset in range(len(words) - width + 1):
                 if hashlib.sha256(" ".join(words[offset:offset + width]).encode()).hexdigest() in digests:

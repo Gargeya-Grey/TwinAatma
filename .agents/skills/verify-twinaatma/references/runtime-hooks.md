@@ -21,8 +21,13 @@ interpreter and requires its exact build manifest:
 python -B .agents/skills/verify-twinaatma/scripts/runtime_hooks.py --binary <current-executable> --build-manifest <build-manifest.json> --output work/gc-artifacts/.knowledgeos/runtime-hooks/windows-binary
 ```
 
-The driver creates a retained pip-less venv under an installation path with spaces and installs
-only the supplied wheel. It clears checkout import settings and records actual
+The driver creates a retained pip-less venv with `--copies` under an installation
+path with spaces and installs only the supplied wheel. A copied Linux interpreter
+remains a real target-runtime executable and can be inspected from Windows without
+following LX reparse links. Use an orchestration pip that supports the oldest
+target; the current matrix uses pip 25.1.1 after pip 26.2.1 refused Python 3.9
+in the retained preflight.
+The driver clears checkout import settings and records actual
 interpreter identity, installed origin, module/assets inventory and launcher hashes.
 Frozen acceptance binds the complete distribution and manifest. Its embedded minor
 is labeled unavailable rather than inferred from a builder command.
@@ -39,8 +44,11 @@ Keep each report, hashed command/stdin/stdout/stderr, generated configuration,
 state observations, original package and installation after child shutdown. Combine
 all fourteen reports with the existing source, installed-host and four release
 artifact reports using repeated `--runtime-hook-report <report.json>` arguments to
-`scripts/acceptance.py`. Compute combined Windows/WSL evidence from Linux to inspect
-Linux link metadata. The adapter rejects changed producers, stale product/build
+`scripts/acceptance.py`. Copied interpreter fixtures allow the pinned native Windows
+scorer to inspect the complete matrix. Native Linux grading is also supported,
+but full source-inventory validation on a Windows-mounted drive can be slow.
+Never replace an interpreter link after collecting a report; regenerate every
+cell when the producer changes. The adapter rejects changed producers, stale product/build
 inputs, altered transcripts, misdeclared interpreter minors, missing cases,
 unsubstantiated shutdown and duplicate cells. The original 54-item rubric is unchanged.
 

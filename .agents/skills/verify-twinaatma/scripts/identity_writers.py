@@ -162,6 +162,10 @@ class WritersRun(IdentityRun):
         else:
             record, stdout, stderr = self.cli(name, fixture, arguments)
         after = self.snapshot(fixture, name, "after")
+        if fault:
+            marker = "IDENTITY_WRITER_FAULT=" + str(fixture["vault"] / fault)
+            if record["exit_code"] == 0 or marker not in stderr.splitlines():
+                raise RuntimeError("Injected writer fault was not reached: " + name)
         self.record_case(name, fixture, before, after, kind=kind, roles=[name], detail={"arguments": arguments, "fault_target": fault, **(detail or {})})
         return record, stdout, stderr
 
@@ -186,6 +190,9 @@ class WritersRun(IdentityRun):
         record["import_path"] = str(fixture["toolkit"])
         self.save(name + ".command.json", record)
         after = self.snapshot(fixture, name, "after")
+        expected_exit = 1 if name == "script-onboarding-0" else 0
+        if record["exit_code"] != expected_exit:
+            raise RuntimeError(f"Public script returned unexpected exit status: {name} (expected {expected_exit}, got {record['exit_code']})")
         detail = {"script": relative, "arguments": list(map(str, arguments)), "shell": shell}
         self.record_case(name, fixture, before, after, kind="script", roles=[name], detail=detail)
         return record, stdout, stderr
@@ -293,6 +300,10 @@ class WritersRun(IdentityRun):
             self.cli_case(name, fixture, arguments, kind="fault", fault=target)
             self.cli_case(name + "-retry", fixture, arguments, kind="retry")
         fixture = self.prepare_writer("setup-fault")
+        config = fixture["vault"] / ".cursor/mcp.json"
+        document = json.loads(config.read_text(encoding="utf-8"))
+        document["mcpServers"]["knowledgeos"]["command"] = "synthetic-stale-python"
+        config.write_bytes((json.dumps(document, indent=2) + "\n").encode("utf-8"))
         arguments = ["setup-host", "--host", "cursor", "--vault", str(fixture["vault"]), "--write"]
         self.cli_case("setup-fault", fixture, arguments, kind="fault", fault=".cursor/mcp.json")
         self.cli_case("setup-fault-retry", fixture, arguments, kind="retry")

@@ -273,6 +273,21 @@ class VersionAndSchemaTests(TempVaultCase):
 
 
 class ValidatorRootGuideTests(TempVaultCase):
+    def test_a_root_readme_with_note_frontmatter_reports_invalid_schema_and_links(self):
+        from knowledgeos.validator import validate_vault
+
+        text = NOTE.format(title="Owner runbook", note_id="kos:project:owner-runbook")
+        text = text.replace("knowledgeos-v0.3", "knowledgeos-v9.9")
+        text += "\n[Missing runbook](Projects/Does-Not-Exist.md)\n"
+        self.write("README.md", text)
+        report = validate_vault(self.vault)
+        self.assertIn({"path": "README.md", "issue": "unknown_schema_version", "schema": "knowledgeos-v9.9"}, report["errors"])
+        self.assertIn({"path": "README.md", "issue": "broken_link", "target": "Projects/Does-Not-Exist.md"}, report["errors"])
+        code, out, err = cli(["validate", "--vault", str(self.vault)])
+        self.assertEqual(code, 1, out + err)
+        self.assertIn({"path": "README.md", "issue": "unknown_schema_version", "schema": "knowledgeos-v9.9"}, json.loads(out)["errors"])
+        self.assertIn({"path": "README.md", "issue": "broken_link", "target": "Projects/Does-Not-Exist.md"}, json.loads(out)["errors"])
+
     # G3 ----------------------------------------------------------------------------------
     def test_a_root_readme_without_frontmatter_is_not_a_note(self):
         from knowledgeos.validator import validate_vault

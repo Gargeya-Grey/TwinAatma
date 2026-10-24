@@ -381,5 +381,57 @@ class FrozenContractTests(unittest.TestCase):
         self.assertFalse(observed["action_named"])
 
 
+class RestoreOperationalFilesTests(unittest.TestCase):
+    def test_a_valid_restored_proposal_does_not_hide_a_failed_doctor(self):
+        proposal = "People/Self-Proposals/pending.md"
+        row = {"sha256": "row", "proposal": proposal, "status": "draft", "applied": False}
+        source = mock.Mock()
+        source.snap.return_value = {"gate_key_sha256": "original-key", "ledger_sha256": "ledger", "self_sha256": "self"}
+        source.ledger.return_value = [row]
+        source.json.return_value = {"state_members": ["gate.key", "self-proposals.jsonl"]}
+        restored = mock.Mock()
+        restored.json.return_value = {"members": ["gate.key", "self-proposals.jsonl"], "gate_key_sha256": "original-key"}
+        restored.snap.side_effect = lambda n: {"gate_key_sha256": "replacement-key", "ledger_sha256": "ledger", "self_sha256": "self"}
+        restored.ledger.return_value = [row]
+        restored.tool.return_value = {"is_error": False, "payload": {"open": [{"path": proposal}], "untrusted": []}}
+        exit_codes = {"pending-2": 0, "doctor-2": 1}
+        restored.command.side_effect = lambda label: {"exit_code": exit_codes[label], "stopped": True, "timed_out": False, "console": False}
+        restored.stdout.side_effect = lambda label: proposal if label == "pending-2" else (
+            "[OK] Proposal ledger is signed (1 entries, outside the vault).\nwaiting for you\n" + proposal
+            + ("\n[ERROR] Hook executable is missing or unusable" if exit_codes[label] else "\n[OK] Environment check passed"))
+        passed, observed = producer.case_valid_again(source, restored, {"proposal_path": proposal})
+        self.assertFalse(passed, observed)
+        exit_codes["doctor-2"] = 0
+        passed, observed = producer.case_valid_again(source, restored, {"proposal_path": proposal})
+        self.assertTrue(passed, observed)
+
+    def test_reconnected_generated_files_may_change_but_custom_files_must_survive(self):
+        before = {"People/Self.md": "self", "Projects/review.md": "note",
+                  ".knowledgeos-vault.json": "vault-id", ".cursor/custom.json": "custom",
+                  ".cursor/hooks.json.notes.md": "custom-hook-notes",
+                  ".cursor/hooks.json": "old-hooks", ".cursor/mcp.json": "old-mcp",
+                  "mcp.cursor.json": "old-example", ".knowledgeos-init.json": "old-receipt"}
+        after = dict(before, **{".cursor/hooks.json": "new-hooks", ".cursor/mcp.json": "new-mcp",
+                                "mcp.cursor.json": "new-example", ".knowledgeos-init.json": "new-receipt"})
+        notes = {"Projects/review.md": {"sha256": "note", "id": "kos:project:review", "links": []}}
+        origin = mock.Mock()
+        origin.json.side_effect = lambda name: {"inventory-a.json": before,
+                                               "carried.json": {"vault_zip_sha256": "backup"}}[name]
+        restored = mock.Mock()
+        restored.json.side_effect = lambda name: {"inventory-b0.json": before, "inventory-b-final.json": after,
+                                                 "unpack.json": {"vault_zip_sha256": "backup"},
+                                                 "note-files.json": notes}[name]
+        restored.command.return_value = {"exit_code": 0, "stopped": True, "timed_out": False, "console": False}
+        restored.stdout.return_value = '{"summary":{"errors":0}}'
+        passed, observed = producer.case_content(origin, restored, {"notes": notes})
+        self.assertTrue(passed, observed)
+        for protected in ("People/Self.md", "Projects/review.md", ".knowledgeos-vault.json", ".cursor/custom.json", ".cursor/hooks.json.notes.md"):
+            with self.subTest(protected=protected):
+                after[protected] = "unexpected change"
+                passed, observed = producer.case_content(origin, restored, {"notes": notes})
+                self.assertFalse(passed, observed)
+                after[protected] = before[protected]
+
+
 if __name__ == "__main__":
     unittest.main()
