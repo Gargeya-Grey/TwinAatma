@@ -339,6 +339,117 @@ def install_user(host: str, vault: Path, transport: str = "stdio", *,
                   f"Start a new {host} session to use it.")
 
 
+# Claude Code has a memory of its own and prefers it. These two events put the person's
+# vault in front of the model without a tool call. See knowledgeos/claude_hook.py.
+CLAUDE_HOOK_TIMEOUTS = {"SessionStart": 60, "UserPromptSubmit": 20}
+_CLAUDE_HOOK_MARK = ["hook", "claude-code"]
+
+
+def claude_settings_path() -> Path:
+    """The Claude Code settings file of this person."""
+    base = os.environ.get("CLAUDE_CONFIG_DIR")
+    return (Path(base).expanduser() if base else Path.home() / ".claude") / "settings.json"
+
+
+def claude_hook_groups(vault: Path) -> dict[str, dict]:
+    """One hook group per event. Each starts this installation directly, with no shell."""
+    command, base_args, extra_env = _binary_command()
+    if extra_env:
+        # A hook entry cannot carry the import path a source checkout needs.
+        raise UnsupportedHost(
+            "The Claude Code hooks need the installed `twinaatma` command. Install the "
+            "package with pip, then run this command again."
+        )
+    args = [*base_args, *_CLAUDE_HOOK_MARK, "--vault", str(Path(vault).resolve())]
+    return {event: {"hooks": [{"type": "command", "command": command, "args": args, "timeout": timeout}]}
+            for event, timeout in CLAUDE_HOOK_TIMEOUTS.items()}
+
+
+def _is_claude_hook(handler: object) -> bool:
+    args = handler.get("args") if isinstance(handler, dict) else None
+    return isinstance(args, list) and any(
+        args[index:index + 2] == _CLAUDE_HOOK_MARK for index in range(len(args)))
+
+
+def merge_claude_hooks(settings: dict, groups: dict[str, dict]) -> dict:
+    """A copy of ``settings`` with this toolkit's hooks set to ``groups``. All else is kept."""
+    hooks = settings.get("hooks", {})
+    if not isinstance(hooks, dict):
+        raise InvalidHostConfig("'hooks' must be a JSON object")
+    merged = dict(hooks)
+    for event, group in groups.items():
+        existing = merged.get(event, [])
+        if not isinstance(existing, list):
+            raise InvalidHostConfig(f"'hooks.{event}' must be a list")
+        kept = []
+        for other in existing:
+            handlers = other.get("hooks") if isinstance(other, dict) else None
+            if not isinstance(handlers, list):
+                kept.append(other)
+                continue
+            foreign = [handler for handler in handlers if not _is_claude_hook(handler)]
+            if len(foreign) == len(handlers):
+                kept.append(other)
+            elif foreign:
+                kept.append({**other, "hooks": foreign})
+        merged[event] = [*kept, group]
+    return {**settings, "hooks": merged}
+
+
+def claude_hooks_snippet(vault: Path) -> str:
+    return json.dumps({"hooks": {event: [group] for event, group in claude_hook_groups(vault).items()}},
+                      indent=2)
+
+
+def install_claude_hooks(vault: Path, settings_path: Path | None = None) -> tuple[bool, str]:
+    """Add the two hooks to the person's Claude Code settings. ``(done, message)``.
+
+    Everything else in the file is kept. A file this cannot read safely is left as it
+    is, and the message holds the entries for the person to add.
+    """
+    from knowledgeos.textio import atomic_create_bytes, atomic_write_bytes
+
+    path = Path(settings_path) if settings_path is not None else claude_settings_path()
+    groups = claude_hook_groups(vault)
+
+    def by_hand(reason: str) -> tuple[bool, str]:
+        return False, (f"Left {path} unchanged: {reason}. To let Claude Code read this vault "
+                       f"before each answer, add these entries to it yourself:\n{claude_hooks_snippet(vault)}")
+
+    if path.is_symlink():
+        return by_hand("it is a link, and a rewrite would replace the link with a file")
+    try:
+        original = path.read_bytes() if path.exists() else None
+        settings = json.loads(original.decode("utf-8-sig")) if original is not None else {}
+    except (OSError, ValueError, UnicodeError) as exc:
+        return by_hand(f"it cannot be read as JSON ({exc})")
+    if not isinstance(settings, dict):
+        return by_hand("it does not hold a JSON object")
+    try:
+        merged = merge_claude_hooks(settings, groups)
+    except InvalidHostConfig as exc:
+        return by_hand(str(exc))
+    if merged == settings:
+        return True, f"Claude Code already reads this vault before each answer ({path})."
+    payload = (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if (path.read_bytes() if path.exists() else None) != original:
+            return by_hand("it changed during setup")
+        if original is None:
+            atomic_create_bytes(path, payload)
+        else:
+            mode = path.stat().st_mode & 0o777
+            atomic_write_bytes(path, payload)
+            if os.name != "nt":
+                os.chmod(path, mode)
+    except OSError as exc:
+        return by_hand(f"it could not be written ({exc})")
+    return True, (f"Claude Code now reads this vault before each answer. Changed {path}: two "
+                  "entries under \"hooks\" run `hook claude-code`. Remove them to undo, or use "
+                  "--no-hooks to skip this step.")
+
+
 def render_codex_config(config: dict) -> str:
     """Render a Codex MCP configuration in its native TOML format."""
     from knowledgeos.codex_config import render
@@ -372,6 +483,11 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
         help="Register the vault for every project of this person, through the host's own "
              "command (claude-code, codex). With --print, only show that command.",
     )
+    parser.add_argument(
+        "--no-hooks", dest="no_hooks", action="store_true",
+        help="With --global for claude-code: do not add the two hooks that put this vault "
+             "in front of Claude Code before each answer.",
+    )
     args = parser.parse_args(argv)
     if args.user_level and (args.out or args.write):
         print("--global cannot be combined with --write or --out.", file=sys.stderr)
@@ -389,11 +505,27 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
                 read_vault_id(os.environ["KNOWLEDGEOS_VAULT"])
         vault = resolve_vault(args.vault) if args.vault else resolve_vault()
         if args.user_level:
+            hooks = args.host == "claude-code" and not args.no_hooks
             if args.do_print:
                 print(_shell_line(user_command(args.host, vault, args.transport)))
+                if hooks:
+                    try:
+                        snippet = claude_hooks_snippet(vault)
+                    except UnsupportedHost as exc:
+                        print(str(exc), file=sys.stderr)
+                    else:
+                        print(f"\nAnd these entries in {claude_settings_path()}:\n{snippet}")
                 return 0
             done, message = install_user(args.host, vault, args.transport)
             print(message, file=sys.stdout if done else sys.stderr)
+            # A registration the host refused may already exist, so the hooks are still
+            # set. A machine that never ran Claude Code gets no settings file from here.
+            if hooks and (done or claude_settings_path().parent.is_dir()):
+                try:
+                    hooked, note = install_claude_hooks(vault)
+                except UnsupportedHost as exc:
+                    hooked, note = False, str(exc)
+                print(note, file=sys.stdout if hooked else sys.stderr)
             return 0 if done else 1
         if args.out:
             cfg = build_config(args.host, vault, args.transport)

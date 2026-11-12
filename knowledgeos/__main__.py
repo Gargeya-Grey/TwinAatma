@@ -43,6 +43,16 @@ def _run_hook(name: str, argv: list[str]) -> int:
     import os
     import runpy
 
+    if name == "claude-code":
+        from knowledgeos.claude_hook import main as claude_hook
+
+        # Claude Code sends and reads UTF-8, whatever the console code page is.
+        for stream in (sys.stdin, sys.stdout):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (AttributeError, OSError, ValueError):
+                pass
+        return claude_hook(argv)
     if name not in {"twin_session_start", "twin_session_end"}:
         print(f"hook: unknown hook {name!r}", file=sys.stderr)
         return 2
@@ -163,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         # guards, from inside the bundle rather than from the vault.
         rest = argv[1:]
         if not rest:
-            print("hook: name required (twin_session_start, twin_session_end)", file=sys.stderr)
+            print("hook: name required (twin_session_start, twin_session_end, claude-code)", file=sys.stderr)
             return 2
         return _run_hook(rest[0], rest[1:])
 

@@ -49,7 +49,14 @@ twinaatma setup-host --host claude-code --global            # 3. connect where y
 
 Step 3 registers the vault for **every project**, through the host's own command.
 `--host codex --global` does the same for Codex. Add `--print` to see the command
-without running it. Other hosts read a project file instead: run
+without running it.
+
+Claude Code has a memory of its own and uses that one first. So for Claude Code, step 3
+also adds two entries under `hooks` in your `~/.claude/settings.json`. When a session
+starts, they show the assistant your approved profile. Before each prompt, they show it
+the saved notes that match. The entries only read your vault, they keep everything else
+in that file, and `--no-hooks` skips them. Remove the two entries that run
+`hook claude-code` to undo. Other hosts read a project file instead: run
 `twinaatma setup-host --host cursor --write` inside the vault (`vscode` works the same
 way; `claude-desktop` and `windsurf` take `--print` and a paste).
 
@@ -65,6 +72,9 @@ twinaatma self review
 `import` also reads a `CLAUDE.md`, an `AGENTS.md`, or a folder of agent memory files.
 It only reads the source. Each fact becomes an ordinary note; what the remembering
 policy recognises as a credential is withheld; importing the same file twice adds nothing.
+A source file whose own frontmatter marks it private is withheld whole. One run writes at
+most 500 new notes and drafts at most 12 rules. It says what is left, and the same command
+continues from there.
 Lines that read like standing rules become **one profile draft**. `self review` shows you
 every waiting draft once: `y` applies it, `d` discards it, anything else keeps it for
 later. `--dry-run` counts what an import would do and writes nothing.

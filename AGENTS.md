@@ -77,4 +77,8 @@ This section is for agents that change TwinAatma's own code in this repository.
 Read `docs/product-direction.md` for what is built next, and
 `outputs/handoffs/CURRENT.md` for the latest handoff. Recheck the checkout before you
 rely on saved state.
+
+Never run `setup-host --global` on the owner's machine without `--print`. It registers a
+server with the owner's hosts and, for Claude Code, changes `~/.claude/settings.json`.
+Tests move that folder with `CLAUDE_CONFIG_DIR`.
 <!-- toolkit-dev:end -->

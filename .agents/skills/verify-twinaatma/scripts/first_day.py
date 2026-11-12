@@ -50,6 +50,13 @@ class Journey:
         return subprocess.run([sys.executable, "-B", "-P", "-m", "knowledgeos", *args], capture_output=True,
                               text=True, env=self.env, cwd=str(self.root), stdin=subprocess.DEVNULL, timeout=300)
 
+    def hook(self, **event: str) -> subprocess.CompletedProcess:
+        """Run the Claude Code hook the way the host does: the event on stdin, UTF-8 both ways."""
+        return subprocess.run(
+            [sys.executable, "-B", "-P", "-m", "knowledgeos", "hook", "claude-code", "--vault", str(self.vault)],
+            input=json.dumps(event), capture_output=True, text=True, encoding="utf-8", env=self.env,
+            cwd=str(self.root), timeout=300)
+
     def server(self) -> "Server":
         return Server(self)
 
@@ -162,6 +169,23 @@ def run(journey: Journey) -> None:
     held = [path.name for path in journey.vault.rglob("*.md")
             if SECRET in path.read_text(encoding="utf-8", errors="replace")]
     check("the credential is in no note", held == [], held)
+
+    opened = journey.hook(hook_event_name="SessionStart", source="startup")
+    check("the Claude Code hook opens a session with how to use the memory",
+          opened.returncode == 0 and "memory_session_start" in opened.stdout, opened.stdout + opened.stderr)
+    asked = journey.hook(hook_event_name="UserPromptSubmit",
+                         prompt="choose between Postgres and MySQL for the new invoices service")
+    check("the Claude Code hook puts the imported preference before the prompt",
+          asked.returncode == 0 and "Postgres over MongoDB" in asked.stdout, asked.stdout + asked.stderr)
+    check("the Claude Code hook leaves an undecided draft out", "People/Self-Proposals/" not in asked.stdout)
+    broken = journey.hook(hook_event_name="UserPromptSubmit", prompt="payments API key for the account")
+    check("the credential is in no hook output", SECRET not in opened.stdout + asked.stdout + broken.stdout)
+    quiet = subprocess.run([sys.executable, "-B", "-P", "-m", "knowledgeos", "hook", "claude-code", "--vault",
+                            str(journey.root / "nowhere")], input="{not json", capture_output=True, text=True,
+                           env=journey.env, cwd=str(journey.root), timeout=300)
+    check("a broken hook call ends quietly with exit code 0", (quiet.returncode, quiet.stdout) == (0, ""),
+          quiet.stderr)
+    profile_unchanged("the Claude Code hook")
 
     for host, opening in (("claude-code", "claude mcp add --scope user"), ("codex", "codex mcp add knowledgeos")):
         line = cli("setup-host", "--host", host, "--vault", vault, "--global", "--print")

@@ -229,11 +229,18 @@ def profile_is_empty(identity: Any) -> bool:
     sections = identity.get("sections") if isinstance(identity, dict) else None
     if not isinstance(sections, dict) or not sections:
         return False
-    for key in _IDENTITY_SECTIONS:
+    return not confirmed_sections(identity)
+
+
+def confirmed_sections(identity: Any) -> dict[str, str]:
+    """The identity sections the person has filled, by key, without the section markers."""
+    sections = identity.get("sections") if isinstance(identity, dict) else None
+    confirmed: dict[str, str] = {}
+    for key in _IDENTITY_SECTIONS if isinstance(sections, dict) else ():
         body = _SECTION_MARKER.sub("", str(sections.get(key) or "")).strip()
         if body and not body.startswith(_UNSET_SECTION):
-            return False
-    return True
+            confirmed[key] = body
+    return confirmed
 
 
 def soft_prompt_for_human(
