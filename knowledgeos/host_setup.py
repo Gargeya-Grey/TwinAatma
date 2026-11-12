@@ -7,7 +7,9 @@ import os
 import sys
 from pathlib import Path
 
-HOSTS = ("codex", "cursor", "claude-desktop", "windsurf", "vscode", "generic-stdio")
+HOSTS = ("codex", "cursor", "claude-code", "claude-desktop", "windsurf", "vscode", "generic-stdio")
+# Hosts with their own command that registers a server for every project of one person.
+USER_LEVEL_HOSTS = {"claude-code": "claude", "codex": "codex"}
 
 
 class UnsupportedHost(Exception):
@@ -99,6 +101,8 @@ def config_target(host: str, vault: Path) -> Path | None:
         return vault / ".codex" / "config.toml"
     if host == "cursor":
         return vault / ".cursor" / "mcp.json"
+    if host == "claude-code":
+        return vault / ".mcp.json"
     if host == "vscode":
         return vault / ".vscode" / "mcp.json"
     return None
@@ -261,6 +265,80 @@ def write_config(host: str, vault: Path, transport: str = "stdio") -> Path:
     return target
 
 
+def user_command(host: str, vault: Path, transport: str = "stdio") -> list[str]:
+    """The host's own command that makes this vault available in every project.
+
+    A project config only helps inside the vault folder, and people rarely work there.
+    The host owns its user-level file and rewrites it while it runs, so this goes through
+    the host's own command instead of editing that file.
+    """
+    if host not in USER_LEVEL_HOSTS:
+        raise UnsupportedHost(
+            f"{host} has no user-level setup in this build. Use --write for its project "
+            "config, or --print and paste the result into that host's MCP settings."
+        )
+    key = "mcp_servers" if host == "codex" else "mcpServers"
+    server = build_config(host, vault, transport)[key]["knowledgeos"]
+    env = [part for name, value in server["env"].items() for part in ("--env", f"{name}={value}")]
+    launch = [server["command"], *server["args"]]
+    if host == "codex":
+        return ["codex", "mcp", "add", "knowledgeos", *env, "--", *launch]
+    # `--env` takes several pairs, so another option has to sit between it and the name.
+    return ["claude", "mcp", "add", "--scope", "user", *env, "--transport", "stdio",
+            "knowledgeos", "--", *launch]
+
+
+def _shell_line(argv: list[str]) -> str:
+    import shlex
+    import subprocess
+
+    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+
+
+def install_user(host: str, vault: Path, transport: str = "stdio", *,
+                 resolve=None, run=None) -> tuple[bool, str]:
+    """Register the vault with the host for every project. ``(done, message)``.
+
+    When the host's command cannot be started from here, nothing is changed and the
+    message holds the exact line for the person to run.
+    """
+    import subprocess
+
+    argv = user_command(host, vault, transport)
+    line = _shell_line(argv)
+    if resolve is None:
+        from knowledgeos.safe_exec import resolve_executable
+
+        def resolve(name: str) -> str | None:
+            # A program inside the vault is never the host: notes must not start code.
+            return resolve_executable(name, forbid_under=vault)
+
+    program = resolve(argv[0])
+    if program is None:
+        return False, f"`{argv[0]}` was not found on PATH. Install {host}, then run:\n  {line}"
+    if os.name == "nt" and Path(program).suffix.lower() != ".exe":
+        # A .cmd or .bat wrapper re-parses its arguments through cmd.exe.
+        return False, f"`{argv[0]}` is a script wrapper on this machine. Run this yourself:\n  {line}"
+    try:
+        done = (run or subprocess.run)(
+            [program, *argv[1:]], capture_output=True, text=True, timeout=60,
+            stdin=subprocess.DEVNULL, shell=False, cwd=str(Path.home()),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, f"`{argv[0]}` could not be started ({exc}). Run this yourself:\n  {line}"
+    if done.returncode != 0:
+        said = ((done.stderr or "").strip() or (done.stdout or "").strip()).splitlines()[-1:]
+        remove = ("codex mcp remove knowledgeos" if host == "codex"
+                  else "claude mcp remove knowledgeos --scope user")
+        return False, (
+            f"{host} did not accept the change: {said[0] if said else 'no reason given'}\n"
+            f"If a server named knowledgeos is already registered, remove it with\n  {remove}\n"
+            "and run this command again."
+        )
+    return True, (f"Registered vault {Path(vault).resolve()} with {host} for every project. "
+                  f"Start a new {host} session to use it.")
+
+
 def render_codex_config(config: dict) -> str:
     """Render a Codex MCP configuration in its native TOML format."""
     from knowledgeos.codex_config import render
@@ -289,7 +367,15 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
         help="Write the host's project config and reconnect unchanged generated Cursor files to this installation",
     )
     parser.add_argument("--print", dest="do_print", action="store_true")
+    parser.add_argument(
+        "--global", dest="user_level", action="store_true",
+        help="Register the vault for every project of this person, through the host's own "
+             "command (claude-code, codex). With --print, only show that command.",
+    )
     args = parser.parse_args(argv)
+    if args.user_level and (args.out or args.write):
+        print("--global cannot be combined with --write or --out.", file=sys.stderr)
+        return 2
 
     try:
         from knowledgeos.vault_resolve import read_vault_id
@@ -302,6 +388,13 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
             if os.environ.get("KNOWLEDGEOS_VAULT"):
                 read_vault_id(os.environ["KNOWLEDGEOS_VAULT"])
         vault = resolve_vault(args.vault) if args.vault else resolve_vault()
+        if args.user_level:
+            if args.do_print:
+                print(_shell_line(user_command(args.host, vault, args.transport)))
+                return 0
+            done, message = install_user(args.host, vault, args.transport)
+            print(message, file=sys.stdout if done else sys.stderr)
+            return 0 if done else 1
         if args.out:
             cfg = build_config(args.host, vault, args.transport)
             from knowledgeos.data_ops import plain_vault_path
