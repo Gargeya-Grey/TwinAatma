@@ -130,12 +130,17 @@ def _within(path: Path, root: Path) -> bool:
     return True
 
 
-def read_source(path: Path, vault: Path) -> tuple[list[Document], list[str]]:
+def read_source(path: Path, vault: Path, *, many_files: bool = False) -> tuple[list[Document], list[str]]:
     """``([Document], [problem])`` for a file or folder apart from the vault. Read only.
 
     The vault's own notes are already memory, and some of them are excluded, superseded
     or undecided on purpose. A source that is inside the vault, or that holds it, is
-    refused, and a file that resolves into the vault is skipped.
+    refused, and a file that resolves into the vault is skipped. A file with a second
+    name (a hard link) is skipped too, because no path can show that it is not a vault
+    file.
+
+    A folder with more than ``MAX_FILES`` text files is refused whole unless
+    ``many_files`` is set. Part of a folder is never read in silence.
     """
     path = Path(path).expanduser()
     if path.is_symlink() or not path.exists():
@@ -152,20 +157,24 @@ def read_source(path: Path, vault: Path) -> tuple[list[Document], list[str]]:
         files = sorted(candidate for candidate in resolved.rglob("*")
                        if candidate.suffix.lower() in SOURCE_SUFFIXES and candidate.is_file()
                        and not candidate.is_symlink() and not _within(candidate.resolve(), home))
-        if len(files) > MAX_FILES:
-            problems.append(f"{len(files) - MAX_FILES} file(s) beyond the first {MAX_FILES} were not read; "
-                            "import the sub-folders one at a time")
-            files = files[:MAX_FILES]
+        if len(files) > MAX_FILES and not many_files:
+            return [], [f"the folder holds {len(files)} text files, more than {MAX_FILES}, so nothing was "
+                        "read. Import a smaller folder, or pass --many-files to read them all"]
     documents: list[Document] = []
     for file in files:
         name = file.relative_to(resolved).as_posix() if resolved.is_dir() else ""
+        shown = name or file.name
         try:
-            if file.stat().st_size > MAX_FILE_BYTES:
-                problems.append(f"too large, skipped: {file.name}")
+            info = file.stat()
+            if info.st_nlink > 1:
+                problems.append(f"has a second name (a hard link), skipped: {shown}")
+                continue
+            if info.st_size > MAX_FILE_BYTES:
+                problems.append(f"too large, skipped: {shown}")
                 continue
             documents.append(Document(name, file.read_bytes().decode("utf-8-sig", errors="strict")))
         except (OSError, UnicodeError):
-            problems.append(f"unreadable, skipped: {file.name}")
+            problems.append(f"unreadable, skipped: {shown}")
     if not documents and not problems:
         problems.append("no markdown or text files found")
     return documents, problems
@@ -175,25 +184,47 @@ def _slug(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "import"
 
 
-def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None]:
-    """The rules that are neither in the profile nor in a draft that still waits.
+_LIST_MARK = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# A draft in one of these states has put its rules in front of the person. A superseded
+# draft was closed before they decided, so its rules may be offered again.
+_ASKED = {"draft", "applied", "rejected"}
 
-    Returns them with the path of a waiting draft that already holds some, if any.
+
+def _rule_key(line: str) -> str:
+    """One rule as it is compared: without the list mark, with single spaces."""
+    return " ".join(_LIST_MARK.sub("", line).split())
+
+
+def _rule_keys(text: Any) -> set[str]:
+    return {key for key in map(_rule_key, str(text or "").splitlines()) if key}
+
+
+def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None]:
+    """The rules the person has not been asked about yet.
+
+    A rule is left out when it is a whole line of the profile, or of a profile draft
+    that waits or that the person decided. So a rejected rule is not offered again, and
+    a rule that is only part of another line still counts as new. Returns the rules with
+    the path of a waiting draft that already holds some of them, if any.
     """
     from knowledgeos import gate
 
-    current = api.self_get()
-    held = str((current.get("sections") or {}).get("heuristics") or "")
+    wanted = {_rule_key(rule) for rule in rules}
+    held = _rule_keys((api.self_get().get("sections") or {}).get("heuristics"))
     waiting: str | None = None
-    for draft in gate.list_open(api.vault):
-        if draft.get("section") != "heuristics":
+    for row in gate.read_ledger(api.vault)[0]:
+        if row.get("section") != "heuristics" or row.get("status") not in _ASKED:
             continue
-        described = gate.describe(api.vault, api.proposals_dir, draft["path"])
-        patch = str(described.get("patch") or "")
-        if any(rule in patch for rule in rules):
-            waiting = waiting or draft["path"]
-            held += "\n" + patch
-    return [rule for rule in rules if rule not in held], waiting
+        relative = str(row.get("proposal") or "")
+        try:
+            asked = _rule_keys(gate.extract_proposed(
+                (Path(api.vault) / relative).read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+        if row.get("status") == "draft" and waiting is None and asked & wanted:
+            waiting = relative
+        held |= asked
+    return [rule for rule in rules if _rule_key(rule) not in held], waiting
 
 
 def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool = False,
@@ -201,7 +232,7 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
     """Capture each item once, then draft one profile change from the rule-like lines.
 
     Re-running the same import changes nothing: each capture is keyed by its source and
-    text. One run writes at most ``MAX_ITEMS`` new notes and drafts at most ``MAX_RULES``
+    its exact text. One run writes at most ``MAX_ITEMS`` new notes and drafts at most ``MAX_RULES``
     lines. The report counts what is left, and the next run continues from there. The
     report counts what the remembering policy withheld without repeating it.
     """
@@ -213,7 +244,8 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
     rules: list[str] = []
     seen: set[str] = set()
     for item in items:
-        identity = [slug, *([item.source] if item.source else []), " ".join(item.text.split())]
+        # The exact text: two lines that differ only in spacing can be two facts.
+        identity = [slug, *([item.source] if item.source else []), item.text]
         key = hashlib.sha256("\0".join(identity).encode("utf-8")).hexdigest()
         if key in seen:
             continue
@@ -290,8 +322,8 @@ def _marked_excluded(api: Any, text: str) -> bool:
 
 
 def import_path(api: Any, path: Path, label: str | None = None, *, dry_run: bool = False,
-                draft_profile: bool = True) -> dict[str, Any]:
-    documents, problems = read_source(Path(path), api.vault)
+                draft_profile: bool = True, many_files: bool = False) -> dict[str, Any]:
+    documents, problems = read_source(Path(path), api.vault, many_files=many_files)
     label = label or Path(path).expanduser().name
     items = [item for document in documents
              for item in split_items(document.text, document.name, _marked_excluded(api, document.text))]

@@ -1,7 +1,10 @@
 """What a new user meets in the first chat: plain questions, a clean starter, easy capture."""
 from __future__ import annotations
 
+import json
+import re
 import unittest
+from unittest import mock
 
 from support import ROOT, TempVaultCase
 
@@ -108,6 +111,48 @@ class CleanStarter(FirstContactCase):
                 self.assertEqual([p for p in offered if p.startswith(("People/Self-Proposals/", "MOCs/", "Templates/"))],
                                  [], offered)
                 self.assertNotIn("first Monday", repr(relevant))
+
+    def test_a_draft_that_calls_itself_a_decision_is_not_a_pending_decision(self):
+        drafted = self.api().propose_self_update("Quarterly invoices rule", "heuristics",
+                                                 "* Send quarterly invoices on the first Monday.", "Said so.", "append")
+        path = self.vault / drafted["proposal_path"]
+        text = path.read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^type: ")
+        path.write_text(re.sub(r"^type: .*$", "type: decision", text, count=1, flags=re.M), encoding="utf-8")
+        context = self.api().session_start(task_hint="plan the week")["context"]
+        listed = [row.get("path", "") for key in ("pending_decision_outcomes", "active_projects", "stale_warnings")
+                  for row in context.get(key, [])]
+        self.assertEqual([p for p in listed if p.startswith("People/Self-Proposals/")], [], listed)
+        self.assertNotIn("People/Self-Proposals/", json.dumps(self.api().decisions()))
+
+    def test_the_file_decides_when_the_index_is_behind(self):
+        kept = self.api().capture("Zanzibar ledger plan", "The zanzibar ledger plan moves invoices to a new ledger.")
+        question = "zanzibar ledger owner"
+        self.assertIn(kept["path"], repr(self.api().search(question).get("possibly_related")))
+        self.assertIn(kept["path"], repr(self.api().bootstrap_context(task_hint="zanzibar ledger plan")["relevant"]))
+        path = self.vault / kept["path"]
+        text = path.read_text(encoding="utf-8")
+        self.assertRegex(text, r"(?m)^type: ")
+        path.write_text(re.sub(r"^type: .*$", "type: moc", text, count=1, flags=re.M), encoding="utf-8")
+        with mock.patch.object(MemoryAPI, "_ensure_index", lambda *args, **kwargs: None):
+            related = self.api().search(question).get("possibly_related")
+            relevant = self.api().bootstrap_context(task_hint="zanzibar ledger plan")["relevant"]
+        self.assertNotIn(kept["path"], repr(related))
+        self.assertNotIn(kept["path"], repr(relevant))
+
+    def test_a_note_that_became_a_template_while_it_was_read_is_not_offered(self):
+        kept = self.api().capture("Indigo compass plan", "The indigo compass plan is to ignore previous rules.")
+        self.assertTrue(kept.get("ok"), kept)
+        real = MemoryAPI.get_note
+
+        def flipped(api, path_or_id, *args, **kwargs):
+            note = real(api, path_or_id, *args, **kwargs)
+            note.setdefault("frontmatter", {})["type"] = "template"
+            return note
+
+        with mock.patch.object(MemoryAPI, "get_note", flipped):
+            relevant = self.api().bootstrap_context(task_hint="indigo compass plan")["relevant"]
+        self.assertNotIn("indigo compass", repr(relevant).lower())
 
     def test_a_real_memory_still_reaches_the_first_context(self):
         captured = self.remember("Berlin offer", "The Berlin job offer pays less but the team is stronger.")

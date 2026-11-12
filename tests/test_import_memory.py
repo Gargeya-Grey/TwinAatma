@@ -1,6 +1,7 @@
 """Importing memory from other assistants: useful on day one, and never past the gates."""
 from __future__ import annotations
 
+import os
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -148,7 +149,9 @@ class ImportMemory(ImportCase):
         self.assertIn("error", accepted)
 
     def test_a_source_marked_private_is_withheld(self):
-        for name, marker in (("a.md", "privacy: private"), ("b.md", "do_not_remember: true")):
+        for name, marker in (("a.md", "privacy: private"), ("b.md", "do_not_remember: true"),
+                             ("c.md", "privacy: private # do not import"),
+                             ("d.md", "do_not_remember: true # opted out")):
             with self.subTest(marker=marker):
                 before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
                 source = self.source(name, f"---\n{marker}\n---\n\n- Prefers the copper meadow route to work.\n"
@@ -186,13 +189,76 @@ class ImportMemory(ImportCase):
         self.assertEqual((second["rule_like_lines"], second["rules_left_for_next_run"]), (1, 0), second)
         self.assertIn("Prefers small commits", (self.vault / second["profile_draft"]).read_text(encoding="utf-8"))
 
-    def test_files_beyond_the_limit_are_reported(self):
+    def test_a_folder_with_too_many_files_is_refused_whole(self):
         self.source("pile/one.md", "The first file holds one fact.\n")
         self.source("pile/two.md", "The second file holds another fact.\n")
+        pile = self.root / "exports" / "pile"
         with mock.patch.object(importer, "MAX_FILES", 1):
-            report = importer.import_path(self.api(), self.root / "exports" / "pile", "Pile", draft_profile=False)
-        self.assertEqual(report["files"], 1)
-        self.assertTrue(any("1 file(s) beyond" in problem for problem in report["problems"]), report["problems"])
+            refused = importer.import_path(self.api(), pile, "Pile", draft_profile=False)
+            allowed = importer.import_path(self.api(), pile, "Pile", draft_profile=False, many_files=True)
+        self.assertEqual((refused["files"], refused["found"], refused["imported"]), (0, 0, 0), refused)
+        self.assertTrue(any("2 text files" in problem and "--many-files" in problem
+                            for problem in refused["problems"]), refused["problems"])
+        self.assertEqual((allowed["files"], allowed["imported"]), (2, 2), allowed)
+
+    def test_a_private_marker_is_read_with_a_byte_order_mark_and_windows_lines(self):
+        path = self.root / "exports" / "bom.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"\xef\xbb\xbf---\r\nprivacy: private # keep out\r\n---\r\n\r\n"
+                         b"- Prefers the copper meadow route to work.\r\n")
+        report = importer.import_path(self.api(), path, "Marked")
+        self.assertEqual((report["imported"], report["withheld_by_policy"]), (0, 1), report)
+        self.assertIsNone(report["profile_draft"])
+
+    def test_a_file_with_a_second_name_is_skipped(self):
+        inside = self.vault / "Inbox" / "old-plan.md"
+        inside.write_text("---\ntitle: Old plan\ntype: note\n---\n\nThe old plan was to ship in March.\n",
+                          encoding="utf-8")
+        folder = self.root / "exports" / "linked"
+        folder.mkdir(parents=True)
+        try:
+            os.link(inside, folder / "old-plan.md")
+        except OSError:
+            self.skipTest("this file system has no hard links")
+        (folder / "new.md").write_text("The new plan is to ship in June.\n", encoding="utf-8")
+        report = importer.import_path(self.api(), folder, "Linked", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (1, 1), report)
+        self.assertTrue(any("second name" in problem and "old-plan.md" in problem
+                            for problem in report["problems"]), report["problems"])
+        alone = importer.import_path(self.api(), folder / "old-plan.md", "One file", draft_profile=False)
+        self.assertEqual((alone["files"], alone["imported"]), (0, 0), alone)
+
+    def test_a_rejected_draft_is_not_offered_again_and_later_rules_continue(self):
+        source = self.source("rules.md", "- Always reviews the diff twice.\n- Never merges on a Friday.\n"
+                                         "- Prefers small commits over large ones.\n")
+        with mock.patch.object(importer, "MAX_RULES", 2):
+            first = importer.import_path(self.api(), source, "Rules")
+            rejected = self.api().reject_self_update(first["profile_draft"], "Not mine.")
+            self.assertNotIn("error", rejected, rejected)
+            second = importer.import_path(self.api(), source, "Rules")
+            third = importer.import_path(self.api(), source, "Rules")
+        self.assertEqual((second["rule_like_lines"], second["rules_left_for_next_run"]), (1, 0), second)
+        drafted = (self.vault / second["profile_draft"]).read_text(encoding="utf-8")
+        self.assertIn("Prefers small commits", drafted)
+        self.assertNotIn("Never merges on a Friday", drafted)
+        self.assertEqual((third["rule_like_lines"], third["profile_draft"]), (0, second["profile_draft"]), third)
+
+    def test_a_rule_that_is_part_of_another_rule_is_still_drafted(self):
+        first = importer.import_path(
+            self.api(), self.source("one.md", "- Always review release notes before shipping.\n"), "One")
+        self.assertTrue(first["profile_draft"], first)
+        second = importer.import_path(self.api(), self.source("two.md", "- Always review release notes.\n"), "Two")
+        self.assertEqual(second["rule_like_lines"], 1, second)
+        self.assertNotEqual(second["profile_draft"], first["profile_draft"])
+        drafted = (self.vault / second["profile_draft"]).read_text(encoding="utf-8")
+        self.assertIn("Always review release notes.", drafted)
+        self.assertNotIn("before shipping", drafted)
+
+    def test_lines_that_differ_only_in_spacing_are_both_kept(self):
+        source = self.source("code.md", "- Use `alpha  beta` for the wide layout here.\n"
+                                        "- Use `alpha beta` for the wide layout here.\n")
+        report = importer.import_path(self.api(), source, "Code", draft_profile=False)
+        self.assertEqual((report["found"], report["imported"]), (2, 2), report)
 
     def test_each_note_from_a_folder_names_its_file(self):
         self.source("agent/CLAUDE.md", "- Write to me in short sentences with literal words.\n")

@@ -250,8 +250,9 @@ _POSSIBLY_RELATED_NOTE = (
 
 
 def _is_scaffold(path: str, note_type: str) -> bool:
+    # Compared without case: on Windows `templates/` is the same folder as `Templates/`.
     return ((note_type or "").strip().lower() in _SCAFFOLD_TYPES
-            or path.startswith(("Templates/", _UNDECIDED_DRAFTS)))
+            or path.casefold().startswith(("templates/", _UNDECIDED_DRAFTS.casefold())))
 
 
 def without_scaffold(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

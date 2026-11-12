@@ -717,7 +717,9 @@ class MemoryAPI:
         # `UPDATE notes SET type='decision'` put a concept note in `memory_decisions`
         # across two rebuilds while its own frontmatter said `type: concept`. The index
         # may *find* candidates by that column; the note says what they are.
-        rows = [row for row in rows if str(row.get("type") or "") == "decision"]
+        from knowledgeos.search import without_scaffold
+
+        rows = without_scaffold([row for row in rows if str(row.get("type") or "") == "decision"])
         if status:
             rows = [row for row in rows if str(row.get("status") or "") == status]
         if outcome_status:
@@ -1065,6 +1067,8 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
     @_memory_boundary
     def bootstrap_context(self, task_hint: str = "", limit: int = 8) -> dict[str, Any]:
         """Subconscious load: Self + active work + relevant search."""
+        from knowledgeos.search import without_scaffold
+
         limit = max(1, min(int(limit), 8))
         ctx: dict[str, Any] = {
             "task_hint": task_hint,
@@ -1114,8 +1118,9 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
             # not be reported as three weeks stale because the index says so, and the
             # index lives inside the vault where anything can edit it. The database is
             # how these lists are *found*; the notes are what they mean.
-            projects = self._refresh_rows(self._live_rows(projects), "")
-            decisions = self._refresh_rows(self._live_rows(decisions), "")
+            # A draft or a template that calls itself a project or a decision is neither.
+            projects = without_scaffold(self._refresh_rows(self._live_rows(projects), ""))
+            decisions = without_scaffold(self._refresh_rows(self._live_rows(decisions), ""))
             # Same rule as `decisions()`: the SQL finds candidates by `type`, and the
             # note decides whether that is what it is.
             projects = [
@@ -1156,8 +1161,16 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
             relevant = self._search(task_hint, max(1, min(int(limit), 8)), context=True)
             for key in ("query", "title", "tags", "project", "description", "fts"):
                 relevant.pop(key, None)
+            offered = []
             for row in relevant.get("ranked", []):
                 note = self.get_note(row["path"], max_chars=1200, task_hint=task_hint)
+                # The read that supplies the excerpt also says what the note is now. A
+                # note that became a template since the search is not offered.
+                now = {"path": row["path"],
+                       "type": (note.get("frontmatter") or {}).get("type") or row.get("type")}
+                if not without_scaffold([now]):
+                    continue
+                offered.append(row)
                 if not note.get("error"):
                     row["excerpt"] = note["body"]
                     row["excerpt_truncated"] = note["truncated"]
@@ -1171,6 +1184,8 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
                 for key in ("type", "status", "entity_id"):
                     if not row.get(key):
                         row.pop(key, None)
+            if "ranked" in relevant:
+                relevant["ranked"] = offered
             ctx["relevant"] = relevant
         return self._bound_startup_context(self._note_frozen(ctx))
 

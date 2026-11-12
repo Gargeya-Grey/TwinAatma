@@ -365,10 +365,69 @@ def claude_hook_groups(vault: Path) -> dict[str, dict]:
             for event, timeout in CLAUDE_HOOK_TIMEOUTS.items()}
 
 
-def _is_claude_hook(handler: object) -> bool:
-    args = handler.get("args") if isinstance(handler, dict) else None
-    return isinstance(args, list) and any(
-        args[index:index + 2] == _CLAUDE_HOOK_MARK for index in range(len(args)))
+_OWN_PROGRAMS = {"twinaatma", "knowledgeos"}
+
+
+def _is_claude_hook(handler: object, command: str) -> bool:
+    """True for an entry this toolkit wrote: its own program with exactly its arguments.
+
+    Another tool's hook that happens to take `hook claude-code` is not ours.
+    """
+    if not isinstance(handler, dict):
+        return False
+    args, program = handler.get("args"), handler.get("command")
+    if not isinstance(args, list) or not isinstance(program, str):
+        return False
+    if len(args) != 4 or args[:3] != [*_CLAUDE_HOOK_MARK, "--vault"]:
+        return False
+    return program == command or Path(program).stem.casefold() in _OWN_PROGRAMS
+
+
+def _strict_json(raw: bytes) -> object:
+    """Parse JSON, and refuse what a rewrite would change: NaN, Infinity, a repeated key."""
+    def constant(name: str) -> object:
+        raise ValueError(f"{name} is not JSON")
+
+    def pairs(items: list[tuple[str, object]]) -> dict:
+        document = dict(items)
+        if len(document) != len(items):
+            raise ValueError("a key appears twice in one object")
+        return document
+
+    return json.loads(raw.decode("utf-8-sig"), parse_constant=constant, object_pairs_hook=pairs)
+
+
+def _replace_if_unchanged(path: Path, payload: bytes, original: bytes | None) -> bool:
+    """Put ``payload`` at ``path`` only while the file still holds ``original``.
+
+    The new bytes are written and flushed first, so the last look at the file comes
+    directly before the swap. Claude Code shares no lock for this file, so a change
+    that another program makes between that look and the swap cannot be seen. That
+    instant is as short as the system allows.
+    """
+    import tempfile
+
+    handle, name = tempfile.mkstemp(prefix=".settings-", suffix=".tmp", dir=str(path.parent))
+    staged = Path(name)
+    try:
+        with os.fdopen(handle, "wb") as out:
+            out.write(payload)
+            out.flush()
+            os.fsync(out.fileno())
+        if original is not None and os.name != "nt":
+            os.chmod(staged, path.stat().st_mode & 0o777)
+        if (path.read_bytes() if path.exists() else None) != original:
+            return False
+        if original is None:
+            os.link(staged, path)  # fails when another writer made the file first
+        else:
+            os.replace(staged, path)
+        return True
+    finally:
+        try:
+            staged.unlink()
+        except OSError:
+            pass
 
 
 def merge_claude_hooks(settings: dict, groups: dict[str, dict]) -> dict:
@@ -378,6 +437,7 @@ def merge_claude_hooks(settings: dict, groups: dict[str, dict]) -> dict:
         raise InvalidHostConfig("'hooks' must be a JSON object")
     merged = dict(hooks)
     for event, group in groups.items():
+        command = group["hooks"][0]["command"]
         existing = merged.get(event, [])
         if not isinstance(existing, list):
             raise InvalidHostConfig(f"'hooks.{event}' must be a list")
@@ -387,7 +447,7 @@ def merge_claude_hooks(settings: dict, groups: dict[str, dict]) -> dict:
             if not isinstance(handlers, list):
                 kept.append(other)
                 continue
-            foreign = [handler for handler in handlers if not _is_claude_hook(handler)]
+            foreign = [handler for handler in handlers if not _is_claude_hook(handler, command)]
             if len(foreign) == len(handlers):
                 kept.append(other)
             elif foreign:
@@ -407,8 +467,6 @@ def install_claude_hooks(vault: Path, settings_path: Path | None = None) -> tupl
     Everything else in the file is kept. A file this cannot read safely is left as it
     is, and the message holds the entries for the person to add.
     """
-    from knowledgeos.textio import atomic_create_bytes, atomic_write_bytes
-
     path = Path(settings_path) if settings_path is not None else claude_settings_path()
     groups = claude_hook_groups(vault)
 
@@ -420,7 +478,7 @@ def install_claude_hooks(vault: Path, settings_path: Path | None = None) -> tupl
         return by_hand("it is a link, and a rewrite would replace the link with a file")
     try:
         original = path.read_bytes() if path.exists() else None
-        settings = json.loads(original.decode("utf-8-sig")) if original is not None else {}
+        settings = _strict_json(original) if original is not None else {}
     except (OSError, ValueError, UnicodeError) as exc:
         return by_hand(f"it cannot be read as JSON ({exc})")
     if not isinstance(settings, dict):
@@ -431,18 +489,11 @@ def install_claude_hooks(vault: Path, settings_path: Path | None = None) -> tupl
         return by_hand(str(exc))
     if merged == settings:
         return True, f"Claude Code already reads this vault before each answer ({path})."
-    payload = (json.dumps(merged, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+    payload = (json.dumps(merged, indent=2, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        if (path.read_bytes() if path.exists() else None) != original:
+        if not _replace_if_unchanged(path, payload, original):
             return by_hand("it changed during setup")
-        if original is None:
-            atomic_create_bytes(path, payload)
-        else:
-            mode = path.stat().st_mode & 0o777
-            atomic_write_bytes(path, payload)
-            if os.name != "nt":
-                os.chmod(path, mode)
     except OSError as exc:
         return by_hand(f"it could not be written ({exc})")
     return True, (f"Claude Code now reads this vault before each answer. Changed {path}: two "
@@ -518,14 +569,19 @@ def main(argv: list[str] | None = None, source_root: Path | None = None) -> int:
                 return 0
             done, message = install_user(args.host, vault, args.transport)
             print(message, file=sys.stdout if done else sys.stderr)
-            # A registration the host refused may already exist, so the hooks are still
-            # set. A machine that never ran Claude Code gets no settings file from here.
-            if hooks and (done or claude_settings_path().parent.is_dir()):
+            # The hooks tell the assistant to use this server. They are set only when
+            # this run registered the server for this vault, so they never point at a
+            # missing server or at another vault's server.
+            if hooks and done:
                 try:
                     hooked, note = install_claude_hooks(vault)
                 except UnsupportedHost as exc:
                     hooked, note = False, str(exc)
                 print(note, file=sys.stdout if hooked else sys.stderr)
+            elif hooks:
+                print("The Claude Code hooks were not set, because this run did not register the "
+                      "server. Register it and run this command again. If you register it by "
+                      "hand, add the entries that --global --print shows.", file=sys.stderr)
             return 0 if done else 1
         if args.out:
             cfg = build_config(args.host, vault, args.transport)

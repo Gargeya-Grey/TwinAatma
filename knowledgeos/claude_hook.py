@@ -8,7 +8,8 @@ each prompt, it prints the saved notes that match the prompt.
 The hook adds no new read path. The profile comes from :meth:`MemoryAPI.self_get` and the
 notes from :meth:`MemoryAPI.bootstrap_context`, the route `memory_session_start` uses, so
 the remembering policy and the starter-page filter apply here too. The hook never changes
-a note or the profile.
+a note or the profile. Like every memory call, it brings the search index up to date
+when notes changed, under the lock the memory server uses.
 
 The hook never fails the chat. Exit code 2 would block the person's prompt, so every
 error ends in no output and exit code 0.
@@ -77,7 +78,7 @@ def prompt_context(api: Any, prompt: str) -> str:
         body = str(row.get("excerpt") or "").split("\n## Links", 1)[0]
         excerpt = " ".join(body.split())[:MAX_EXCERPT_CHARS]
         # The profile already arrived when the session started.
-        if path and path != PROFILE_PATH and excerpt:
+        if path and path.casefold() != PROFILE_PATH.casefold() and excerpt:
             lines.append(f"- {path}: {excerpt}")
     return "\n".join([_NOTES_HEAD, *lines[:MAX_NOTES]]) if lines else ""
 

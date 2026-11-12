@@ -108,13 +108,25 @@ class BeforeAPrompt(HookCase):
                                        "* The billing service is frozen on Fridays.", "Said so.", "append")
         self.assertNotIn("frozen on Fridays", self.prompt("billing service rule for Fridays"))
 
-    def test_the_hook_only_reads(self):
-        before = self.notes()
+    def test_the_hook_changes_no_note_and_not_the_profile(self):
+        before = {name: (self.vault / name).read_bytes() for name in self.notes()}
         with SelfGuard(self.vault) as guard:
             self.prompt("which database does the billing service use")
             self.said({"hook_event_name": "SessionStart"})
         guard.assert_unchanged(self)
-        self.assertEqual(self.notes(), before)
+        self.assertEqual({name: (self.vault / name).read_bytes() for name in self.notes()}, before)
+
+    def test_a_note_written_after_the_last_chat_is_found(self):
+        self.prompt("which database does the billing service use")
+        self.write("Inbox/payroll.md", "---\ntitle: Payroll vendor\ntype: note\n---\n\n"
+                                       "The payroll vendor for the Lisbon office is Meridian.\n")
+        self.assertIn("Meridian", self.prompt("who is the payroll vendor for the Lisbon office"))
+
+    def test_the_profile_is_left_out_under_any_spelling_of_its_name(self):
+        row = {"path": "People/self.md", "excerpt": "Rules they work by."}
+        with mock.patch("knowledgeos.memory.MemoryAPI.bootstrap_context",
+                        return_value={"relevant": {"ranked": [row]}}):
+            self.assertEqual(self.prompt("what rules do I work by"), "")
 
 
 class NeverBlocksTheChat(HookCase):
@@ -229,9 +241,36 @@ class InstallTheHooks(TempVaultCase):
         self.assertEqual(groups[0]["hooks"], [beside])
         self.assertEqual(len(groups), 2)
 
+    def test_a_hook_of_another_tool_that_takes_the_same_words_is_kept(self):
+        theirs = {"type": "command", "command": "C:/other-tool.exe", "args": ["hook", "claude-code", "--report"]}
+        longer = {"type": "command", "command": "C:/other-tool.exe",
+                  "args": ["hook", "claude-code", "--vault", "C:/their/vault"]}
+        self.existing({"hooks": {"SessionStart": [{"hooks": [theirs, longer]}]}})
+        self.assertTrue(self.install()[0])
+        groups = self.held()["hooks"]["SessionStart"]
+        self.assertEqual(groups[0]["hooks"], [theirs, longer])
+        self.assertEqual(len(groups), 2)
+
+    def test_a_change_made_while_the_new_file_is_written_is_not_lost(self):
+        self.existing({"model": "opus"})
+        real = os.fsync
+
+        def another_writer(descriptor):
+            self.settings.write_text('{"model": "opus", "concurrent": "keep me"}', encoding="utf-8")
+            return real(descriptor)
+
+        with mock.patch.object(host_setup.os, "fsync", another_writer):
+            done, message = self.install()
+        self.assertFalse(done)
+        self.assertIn("changed during setup", message)
+        self.assertEqual(self.held(), {"model": "opus", "concurrent": "keep me"})
+        self.assertEqual([path.name for path in self.settings.parent.iterdir()], ["settings.json"])
+
     def test_a_file_that_cannot_be_merged_is_left_as_it_is(self):
         cases = {
             "not JSON": b'{"model": "opus", // my note\n}',
+            "a number that is not JSON": b'{"theme": "dark", "value": NaN}',
+            "a key that appears twice": b'{"model": "opus", "model": "sonnet"}',
             "not an object": b'["hooks"]',
             "hooks is a list": json.dumps({"hooks": []}).encode(),
             "an event is not a list": json.dumps({"hooks": {"SessionStart": {"hooks": []}}}).encode(),
@@ -308,12 +347,13 @@ class SetupCommand(TempVaultCase):
         self.assertIn(str(self.home / "settings.json"), out)
         self.assertFalse(self.home.exists())
 
-    def test_a_refused_registration_still_sets_the_hooks_where_claude_code_has_run(self):
+    def test_a_refused_registration_sets_no_hooks(self):
         self.home.mkdir()
         code, _out, err = self.run_setup(registered=False)
         self.assertEqual(code, 1)
         self.assertIn("did not accept", err)
-        self.assertTrue((self.home / "settings.json").is_file())
+        self.assertIn("hooks were not set", err)
+        self.assertEqual(list(self.home.iterdir()), [])
 
     def test_a_machine_without_claude_code_gets_no_settings_file(self):
         code, _out, _err = self.run_setup(registered=False)

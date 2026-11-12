@@ -388,6 +388,25 @@ _EXCLUDED_LABELS = {"exclude", "excluded", "private", "secret", "credential", "c
                     "sensitive", "sensitive-third-party", "third-party-sensitive", "do-not-remember"}
 
 
+_YAML_COMMENT = re.compile(r"\s+#.*$")
+_FLAG_NOT_SET = {"", "false", "no", "off", "0", "null", "none", "~"}
+
+
+def _plain_scalar(value):
+    """A frontmatter value without a trailing YAML comment or quotes."""
+    if not isinstance(value, str):
+        return value
+    return _YAML_COMMENT.sub("", value).strip().strip("\"'").strip()
+
+
+def _flag_is_set(value) -> bool:
+    """True unless a privacy flag clearly says no. Text nobody can read as a no is a yes."""
+    value = _plain_scalar(value)
+    if isinstance(value, str):
+        return value.casefold() not in _FLAG_NOT_SET
+    return bool(value)
+
+
 class PolicyError(ValueError):
     """A refusal whose message never includes the excluded input or unsafe path."""
 
@@ -698,10 +717,11 @@ class RememberingPolicy:
             value = fm.get(key)
             labels = value if isinstance(value, list) else [value]
             for label in labels:
+                label = _plain_scalar(label)
                 if label and (not isinstance(label, str)
-                              or label.strip().casefold() in _EXCLUDED_LABELS):
+                              or label.casefold() in _EXCLUDED_LABELS):
                     return "explicit_exclusion"
-        if any(fm.get(key) is True for key in ("sensitive", "third_party_sensitive", "do_not_remember")):
+        if any(_flag_is_set(fm.get(key)) for key in ("sensitive", "third_party_sensitive", "do_not_remember")):
             return "explicit_exclusion"
         pattern_reason = _pattern_reason(text)
         if pattern_reason:

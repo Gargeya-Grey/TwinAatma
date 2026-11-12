@@ -718,6 +718,8 @@ def _cmd_import(argv: list[str], root: Path) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Count what would be imported; write nothing")
     parser.add_argument("--no-profile-draft", action="store_true",
                         help="Do not draft a profile change from lines that read like rules")
+    parser.add_argument("--many-files", action="store_true",
+                        help="Read a folder that holds more than 200 text files")
     parser.add_argument("--json", dest="as_json", action="store_true", help="Print the report as JSON")
     args = parser.parse_args(argv)
 
@@ -730,7 +732,8 @@ def _cmd_import(argv: list[str], root: Path) -> int:
         print(str(exc), file=sys.stderr)
         return 1
     report = import_path(MemoryAPI(vault), args.source, args.label or None,
-                         dry_run=args.dry_run, draft_profile=not args.no_profile_draft)
+                         dry_run=args.dry_run, draft_profile=not args.no_profile_draft,
+                         many_files=args.many_files)
     report.pop("paths", None)
     if args.as_json:
         print(json.dumps(report, indent=2))
@@ -754,7 +757,7 @@ def _cmd_import(argv: list[str], root: Path) -> int:
                 print("Decide it in a terminal:  twinaatma self review")
             if report["rules_left_for_next_run"]:
                 print(f"{report['rules_left_for_next_run']} more rule-like line(s) are saved as notes but not "
-                      "drafted yet. Decide this draft, then run the same command again.")
+                      "drafted yet. Run the same command again to draft them.")
             elif report.get("profile_draft_error"):
                 print(f"No profile change was drafted: {report['profile_draft_error']}")
     worked = report["found"] > 0 and not report["failed"]

@@ -197,6 +197,7 @@ def run(journey: Journey) -> None:
               (journey.vault / ".mcp.json").read_text(encoding="utf-8")).get("mcpServers", {}), wrote.stderr)
     doctor = cli("doctor", "--vault", vault)
     check("doctor is healthy afterwards", doctor.returncode == 0, doctor.stdout[-400:])
+    profile_unchanged("setup and doctor")
 
 
 def main(argv: list[str] | None = None) -> int:
