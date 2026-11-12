@@ -473,7 +473,7 @@ class MemoryAPI:
         return self._search(query, limit)
 
     def _search(self, query: str, limit: int, *, context: bool = False) -> dict[str, Any]:
-        from knowledgeos.search import blended_search
+        from knowledgeos.search import blended_search, without_scaffold
 
         self._ensure_index(check_freshness=True)
         payload = blended_search(self.db_path, query, limit, context=context)
@@ -494,8 +494,9 @@ class MemoryAPI:
                 rows = self._live_rows(value)
                 # `possibly_related` was found the way task context finds notes, so it is
                 # re-tested against the files the same way.
-                rows = self._refresh_rows(rows, query, context=context or key == "possibly_related")
-                payload[key] = rows
+                as_context = context or key == "possibly_related"
+                rows = self._refresh_rows(rows, query, context=as_context)
+                payload[key] = without_scaffold(rows) if as_context else rows
         if not payload.get("possibly_related"):
             payload.pop("possibly_related", None)
             payload.pop("possibly_related_note", None)

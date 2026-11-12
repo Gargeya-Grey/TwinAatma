@@ -76,6 +76,16 @@ class ImportCommand(CommandCase):
         self.assertIn("twinaatma self review", out)
         self.assertEqual(len(self.drafts()), 1)
 
+    def test_a_large_source_says_how_to_continue(self):
+        from knowledgeos import importer
+
+        with mock.patch.object(importer, "MAX_ITEMS", 2):
+            code, out, _err, _ = self.run_cli("import", str(self.source()), "--vault", str(self.vault),
+                                              "--no-profile-draft")
+        self.assertEqual(code, 0, out)
+        self.assertIn("Imported 2.", out)
+        self.assertIn("1 more were left for the next run", out)
+
     def test_a_dry_run_writes_nothing(self):
         code, out, _err, _ = self.run_cli("import", str(self.source()), "--vault", str(self.vault), "--dry-run")
         self.assertEqual(code, 0, out)
@@ -195,6 +205,25 @@ class DraftsForOneSection(CommandCase):
         kept = [line for line in ("Prefers short answers.", "Never deploys on a Friday.") if line in self.self_text()]
         self.assertEqual(len(kept), 1, kept)
         self.assertEqual(len(self.drafts()), 1)
+
+    def test_a_rejection_made_during_review_is_not_undone(self):
+        first = self.draft("Short answers", "* Prefers short answers.")
+        second = self.draft("Friday rule", "* Never deploys on a Friday.")
+
+        def decide(screen: str) -> str:
+            on_screen, other = (first, second) if Path(first).name in screen else (second, first)
+            self.assertIn(Path(on_screen).name, screen)
+            rejected = self.api().reject_self_update(other, "The person said no in the chat.")
+            self.assertNotIn("error", rejected, rejected)
+            return "y"
+
+        code, out, _err, prompts = self.run_cli("self", "review", "--vault", str(self.vault), answers=decide)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(len(prompts), 1, out)
+        self.assertNotIn("drafted again", out)
+        self.assertEqual(self.drafts(), [])
+        kept = [line for line in ("Prefers short answers.", "Never deploys on a Friday.") if line in self.self_text()]
+        self.assertEqual(len(kept), 1, kept)
 
     def test_a_closed_replacement_is_reported_and_not_drafted_again(self):
         current = self.section("## Operating Heuristics")

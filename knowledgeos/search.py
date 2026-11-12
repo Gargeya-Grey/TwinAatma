@@ -254,6 +254,16 @@ def _is_scaffold(path: str, note_type: str) -> bool:
             or path.startswith(("Templates/", _UNDECIDED_DRAFTS)))
 
 
+def without_scaffold(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop navigation pages and undecided drafts from rows offered as context.
+
+    Every way a row can reach task context goes through this: full-text hits, the
+    metadata buckets, the substring fallback, and the rows re-read from the files.
+    """
+    return [row for row in rows
+            if not _is_scaffold(str(row.get("path") or ""), str(row.get("type") or ""))]
+
+
 def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool = False) -> dict[str, Any]:
     from knowledgeos.remembering import RememberingPolicy, PolicyError, refusal
     from knowledgeos.database import checked_database_path
@@ -374,6 +384,11 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         except sqlite3.OperationalError as e:
             results["fts_error"] = str(e)
 
+    if context:
+        # A draft or a map page whose title matches the task is still not memory.
+        fts_hits = without_scaffold(fts_hits)
+        for name in meta_sections:
+            results[name] = without_scaffold(results[name])
     results["fts"] = fts_hits
     results["fts_available"] = fts_available
 
@@ -434,10 +449,13 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         for key, rows in list(results.items()):
             if isinstance(rows, list) and rows and isinstance(rows[0], dict):
                 results[key] = api._refresh_rows(rows, query, context=context)
+                if context:
+                    # Again after the refresh: the file, not the index, says what a note is.
+                    results[key] = without_scaffold(results[key])
         if possibly_related:
             # Found the way task context finds notes, so re-tested against the files the
             # same way.
-            possibly_related = api._refresh_rows(possibly_related, query, context=True)
+            possibly_related = without_scaffold(api._refresh_rows(possibly_related, query, context=True))
         if possibly_related:
             results["possibly_related"] = possibly_related
             results["possibly_related_note"] = _POSSIBLY_RELATED_NOTE

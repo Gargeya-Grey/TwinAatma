@@ -20,6 +20,8 @@ from typing import Any, Iterable
 
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_FILES = 200
+# New notes written by one run. A larger source continues on the next run, because a
+# note that is already present does not count.
 MAX_ITEMS = 500
 MAX_ITEM_CHARS = 2000
 MAX_RULES = 12
@@ -40,12 +42,22 @@ _MARKUP = re.compile(r"[<>`#|\[\]{}]")
 class Item:
     text: str
     heading: str
+    # The file inside an imported folder; empty for a single file.
+    source: str = ""
+    # The source file marked itself as not to be remembered.
+    excluded: bool = False
 
     @property
     def title(self) -> str:
         from knowledgeos.memory import title_from_text
 
         return title_from_text(self.text) or "Imported memory"
+
+
+@dataclass(frozen=True)
+class Document:
+    name: str
+    text: str
 
 
 def _strip_frontmatter(text: str) -> str:
@@ -56,7 +68,7 @@ def _strip_frontmatter(text: str) -> str:
     return text
 
 
-def split_items(text: str) -> list[Item]:
+def split_items(text: str, source: str = "", excluded: bool = False) -> list[Item]:
     """One item per top-level bullet or paragraph, with the heading it sat under."""
     items: list[Item] = []
     heading = ""
@@ -69,7 +81,7 @@ def split_items(text: str) -> list[Item]:
         body = "\n".join(current).strip()
         current, in_bullet = [], False
         if len(body.split()) >= 3:
-            items.append(Item(body[:MAX_ITEM_CHARS], heading))
+            items.append(Item(body[:MAX_ITEM_CHARS], heading, source, excluded))
 
     for line in _strip_frontmatter(text.replace("\r\n", "\n")).split("\n"):
         if line.lstrip().startswith(("```", "~~~")):
@@ -110,35 +122,48 @@ def _rule_line(item: Item) -> str | None:
     return _MARKUP.sub("", line).strip() or None
 
 
-def _source_files(path: Path) -> list[Path]:
-    if path.is_file():
-        return [path]
-    found = sorted(candidate for candidate in path.rglob("*")
-                   if candidate.suffix.lower() in SOURCE_SUFFIXES and candidate.is_file()
-                   and not candidate.is_symlink())
-    return found[:MAX_FILES]
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
-def read_source(path: Path, vault: Path) -> tuple[list[tuple[str, str]], list[str]]:
-    """``([(name, text)], [problem])`` for a file or folder outside the vault. Read only."""
+def read_source(path: Path, vault: Path) -> tuple[list[Document], list[str]]:
+    """``([Document], [problem])`` for a file or folder apart from the vault. Read only.
+
+    The vault's own notes are already memory, and some of them are excluded, superseded
+    or undecided on purpose. A source that is inside the vault, or that holds it, is
+    refused, and a file that resolves into the vault is skipped.
+    """
     path = Path(path).expanduser()
-    problems: list[str] = []
     if path.is_symlink() or not path.exists():
         return [], [f"not found or a link: {path.name}"]
-    resolved = path.resolve()
-    try:
-        resolved.relative_to(Path(vault).resolve())
-    except ValueError:
-        pass
-    else:
+    resolved, home = path.resolve(), Path(vault).resolve()
+    if _within(resolved, home):
         return [], ["the source is inside the vault; those notes are already memory"]
-    documents: list[tuple[str, str]] = []
-    for file in _source_files(resolved):
+    if _within(home, resolved):
+        return [], ["the source folder holds the vault; import only the other assistant's folder"]
+    problems: list[str] = []
+    if resolved.is_file():
+        files = [resolved]
+    else:
+        files = sorted(candidate for candidate in resolved.rglob("*")
+                       if candidate.suffix.lower() in SOURCE_SUFFIXES and candidate.is_file()
+                       and not candidate.is_symlink() and not _within(candidate.resolve(), home))
+        if len(files) > MAX_FILES:
+            problems.append(f"{len(files) - MAX_FILES} file(s) beyond the first {MAX_FILES} were not read; "
+                            "import the sub-folders one at a time")
+            files = files[:MAX_FILES]
+    documents: list[Document] = []
+    for file in files:
+        name = file.relative_to(resolved).as_posix() if resolved.is_dir() else ""
         try:
             if file.stat().st_size > MAX_FILE_BYTES:
                 problems.append(f"too large, skipped: {file.name}")
                 continue
-            documents.append((file.name, file.read_bytes().decode("utf-8", errors="strict")))
+            documents.append(Document(name, file.read_bytes().decode("utf-8-sig", errors="strict")))
         except (OSError, UnicodeError):
             problems.append(f"unreadable, skipped: {file.name}")
     if not documents and not problems:
@@ -148,71 +173,6 @@ def read_source(path: Path, vault: Path) -> tuple[list[tuple[str, str]], list[st
 
 def _slug(label: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", label.lower()).strip("-")[:40] or "import"
-
-
-def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool = False,
-                 draft_profile: bool = True) -> dict[str, Any]:
-    """Capture each item once, then draft one profile change from the rule-like lines.
-
-    Re-running the same import changes nothing: each capture is keyed by its source label
-    and text. The report counts what the remembering policy withheld without repeating it.
-    """
-    slug = _slug(label)
-    report: dict[str, Any] = {"label": label, "found": 0, "imported": 0, "already_present": 0,
-                              "withheld_by_policy": 0, "failed": 0, "truncated": False,
-                              "paths": [], "profile_draft": None, "dry_run": dry_run}
-    rules: list[str] = []
-    seen: set[str] = set()
-    for item in items:
-        key = hashlib.sha256((slug + "\0" + " ".join(item.text.split())).encode("utf-8")).hexdigest()
-        if key in seen:
-            continue
-        seen.add(key)
-        if report["found"] >= MAX_ITEMS:
-            report["truncated"] = True
-            break
-        report["found"] += 1
-        rule = _rule_line(item)
-        if dry_run:
-            if rule:
-                rules.append(rule)
-            continue
-        context = f" ({item.heading})" if item.heading else ""
-        content = f"{item.text}\n\nImported from {label}{context}."
-        target = api.inbox / ("capture-" + hashlib.sha256(("import:" + key).encode()).hexdigest() + ".md")
-        existed = target.exists()
-        result = api.capture(item.title, content, ["imported", "from-" + slug], "import:" + key)
-        if result.get("ok") is True:
-            report["already_present" if existed else "imported"] += 1
-            report["paths"].append(result["path"])
-            if rule:
-                rules.append(rule)
-        elif result.get("policy") and result.get("ok") is False:
-            report["withheld_by_policy"] += 1
-        else:
-            report["failed"] += 1
-    rules = list(dict.fromkeys(rules))[:MAX_RULES]
-    report["rule_like_lines"] = len(rules)
-    if rules and draft_profile and not dry_run:
-        rules, waiting = _undrafted(api, rules)
-        if not rules:
-            # Importing the same source again must not stack a second draft.
-            report["profile_draft"] = waiting
-            report["rule_like_lines"] = 0
-    if rules and draft_profile and not dry_run:
-        drafted = api.propose_self_update(
-            f"Rules and preferences imported from {label}",
-            "heuristics",
-            "\n".join(f"* {rule}" for rule in rules),
-            f"Drafted from {len(rules)} imported lines that read like standing rules. "
-            "Approve only the ones that are yours.",
-            "append",
-        )
-        if drafted.get("proposal_path"):
-            report["profile_draft"] = drafted["proposal_path"]
-        else:
-            report["profile_draft_error"] = str(drafted.get("error") or "the draft was refused")
-    return report
 
 
 def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None]:
@@ -236,11 +196,105 @@ def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None]:
     return [rule for rule in rules if rule not in held], waiting
 
 
+def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool = False,
+                 draft_profile: bool = True) -> dict[str, Any]:
+    """Capture each item once, then draft one profile change from the rule-like lines.
+
+    Re-running the same import changes nothing: each capture is keyed by its source and
+    text. One run writes at most ``MAX_ITEMS`` new notes and drafts at most ``MAX_RULES``
+    lines. The report counts what is left, and the next run continues from there. The
+    report counts what the remembering policy withheld without repeating it.
+    """
+    slug = _slug(label)
+    report: dict[str, Any] = {"label": label, "found": 0, "imported": 0, "already_present": 0,
+                              "withheld_by_policy": 0, "failed": 0, "left_for_next_run": 0,
+                              "paths": [], "profile_draft": None, "rules_left_for_next_run": 0,
+                              "dry_run": dry_run}
+    rules: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        identity = [slug, *([item.source] if item.source else []), " ".join(item.text.split())]
+        key = hashlib.sha256("\0".join(identity).encode("utf-8")).hexdigest()
+        if key in seen:
+            continue
+        seen.add(key)
+        report["found"] += 1
+        if item.excluded:
+            report["withheld_by_policy"] += 1
+            continue
+        rule = _rule_line(item)
+        if dry_run:
+            if rule:
+                rules.append(rule)
+            continue
+        target = api.inbox / ("capture-" + hashlib.sha256(("import:" + key).encode()).hexdigest() + ".md")
+        if target.exists():
+            report["already_present"] += 1
+            report["paths"].append(target.relative_to(api.vault).as_posix())
+            if rule:
+                rules.append(rule)
+            continue
+        if report["imported"] >= MAX_ITEMS:
+            report["left_for_next_run"] += 1
+            continue
+        origin = f"{label}, file {item.source}" if item.source else label
+        context = f" ({item.heading})" if item.heading else ""
+        content = f"{item.text}\n\nImported from {origin}{context}."
+        result = api.capture(item.title, content, ["imported", "from-" + slug], "import:" + key)
+        if result.get("ok") is True:
+            report["imported"] += 1
+            report["paths"].append(result["path"])
+            if rule:
+                rules.append(rule)
+        elif result.get("policy") and result.get("ok") is False:
+            report["withheld_by_policy"] += 1
+        else:
+            report["failed"] += 1
+    rules = list(dict.fromkeys(rules))
+    report["rule_like_lines"] = len(rules)
+    if rules and draft_profile and not dry_run:
+        rules, waiting = _undrafted(api, rules)
+        report["rule_like_lines"] = min(len(rules), MAX_RULES)
+        report["rules_left_for_next_run"] = max(0, len(rules) - MAX_RULES)
+        rules = rules[:MAX_RULES]
+        if not rules:
+            # Importing the same source again must not stack a second draft.
+            report["profile_draft"] = waiting
+        else:
+            drafted = api.propose_self_update(
+                f"Rules and preferences imported from {label}",
+                "heuristics",
+                "\n".join(f"* {rule}" for rule in rules),
+                f"Drafted from {len(rules)} imported lines that read like standing rules. "
+                "Approve only the ones that are yours.",
+                "append",
+            )
+            if drafted.get("proposal_path"):
+                report["profile_draft"] = drafted["proposal_path"]
+            else:
+                report["profile_draft_error"] = str(drafted.get("error") or "the draft was refused")
+    return report
+
+
+def _marked_excluded(api: Any, text: str) -> bool:
+    """True when the source file's own metadata says it is not to be remembered.
+
+    Only the metadata is asked here. A credential inside one line is still judged line by
+    line at capture, so one secret does not withhold the rest of a file.
+    """
+    from knowledgeos.parser import split_frontmatter
+    from knowledgeos.remembering import RememberingPolicy
+
+    metadata = split_frontmatter(text.replace("\r\n", "\n"))[0]
+    return bool(metadata) and RememberingPolicy(api.vault).text_reason("", metadata) is not None
+
+
 def import_path(api: Any, path: Path, label: str | None = None, *, dry_run: bool = False,
                 draft_profile: bool = True) -> dict[str, Any]:
     documents, problems = read_source(Path(path), api.vault)
     label = label or Path(path).expanduser().name
-    items = [item for _name, text in documents for item in split_items(text)]
+    items = [item for document in documents
+             for item in split_items(document.text, document.name, _marked_excluded(api, document.text))]
     report = import_items(api, items, label, dry_run=dry_run, draft_profile=draft_profile)
     report["files"] = len(documents)
     report["problems"] = problems

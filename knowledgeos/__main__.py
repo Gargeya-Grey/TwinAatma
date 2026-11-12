@@ -389,10 +389,10 @@ def _self_review(argv: list[str]) -> int:
         seen.add(current["path"])
         siblings = _same_section_drafts(vault, api, current)
         print(f"\n--- Proposal {len(seen)} ({len(waiting) - 1} more waiting) ---")
-        code = _self_approve([current["path"], "--vault", str(vault)], offer_discard=True)
+        code, result = _decide_proposal([current["path"], "--vault", str(vault)], offer_discard=True)
         counts[code if code in counts else 1] += 1
         if code == 0:
-            _redraft_closed(vault, api, current["section"], siblings)
+            _redraft_superseded(api, current["section"], siblings, result.get("superseded") or [])
     if not seen:
         print("No Self proposals waiting for you.")
         return 0
@@ -429,14 +429,18 @@ def _same_section_drafts(vault: Path, api, current: dict) -> dict[str, tuple[str
     return found
 
 
-def _redraft_closed(vault: Path, api, section: str, siblings: dict[str, tuple[str, str] | None]) -> None:
-    """Draft again each addition that the last approval closed, so the person still decides it."""
-    from knowledgeos.gate import list_open
+def _redraft_superseded(api, section: str, siblings: dict[str, tuple[str, str] | None],
+                        superseded: list[str]) -> None:
+    """Draft again each addition that this approval closed, so the person still decides it.
 
-    still_open = {item["path"] for item in list_open(vault)}
-    closed = [path for path in siblings if path not in still_open]
+    Only the drafts the gate reports as superseded by this approval. A draft that someone
+    rejected while the screen was open stays rejected.
+    """
     again = lost = 0
-    for path in closed:
+    for path in superseded:
+        if path not in siblings:
+            lost += 1
+            continue
         addition = siblings[path]
         drafted = addition and api.propose_self_update(
             addition[0], section, addition[1],
@@ -455,6 +459,11 @@ def _redraft_closed(vault: Path, api, section: str, siblings: dict[str, tuple[st
 
 
 def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
+    return _decide_proposal(argv, offer_discard=offer_discard)[0]
+
+
+def _decide_proposal(argv: list[str], *, offer_discard: bool = False) -> tuple[int, dict]:
+    """Show one proposal and take the person's answer. ``(exit code, the gate's result)``."""
     parser = argparse.ArgumentParser(prog="knowledgeos self approve")
     parser.add_argument("proposal", help="Path or filename of a proposal in People/Self-Proposals")
     parser.add_argument("--vault", type=Path, default=None)
@@ -471,7 +480,7 @@ def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
             "Re-run without --yes.",
             file=sys.stderr,
         )
-        return 2
+        return 2, {}
     from knowledgeos.gate import is_real_console
 
     # `isatty()` is true for the NUL device on Windows; the stream must be a real console.
@@ -481,7 +490,7 @@ def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
             "Run this command yourself in a terminal window.",
             file=sys.stderr,
         )
-        return 2
+        return 2, {}
 
     from knowledgeos import gate
     from knowledgeos.memory import MemoryAPI
@@ -497,7 +506,7 @@ def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
             candidate = matches[0] if len(matches) == 1 else candidate
     if not candidate.exists():
         print(f"Proposal not found: {args.proposal}", file=sys.stderr)
-        return 1
+        return 1, {}
 
     # Everything below comes from the ledger row that `_apply` will act on. The screen
     # used to parse the section and mode out of the proposal file with a scan over the
@@ -510,7 +519,7 @@ def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
         hint = described.get("hint")
         if hint:
             print(hint, file=sys.stderr)
-        return 1
+        return 1, {}
     section = described["section"]
     mode = described["mode"]
     patch = described["patch"]
@@ -574,21 +583,21 @@ def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
     except EOFError:
         print()
         print("No answer possible (stdin is closed); nothing applied.")
-        return 1
+        return 1, {}
     if offer_discard and answer in {"d", "discard"}:
         result = gate.reject(vault, api.proposals_dir, str(candidate), "Discarded by the owner during review.")
         if result.get("error"):
             print(result["error"], file=sys.stderr)
-            return 1
+            return 1, {}
         print("Discarded. People/Self.md is unchanged.")
-        return _DISCARDED
+        return _DISCARDED, {}
     if answer not in accepted:
         print("Not applied.")
-        return 1
+        return 1, {}
 
     result = gate.approve_interactive(vault, api.self_path, api.proposals_dir, str(candidate))
     print(json.dumps(result, indent=2))
-    return 0 if result.get("ok") else 1
+    return (0 if result.get("ok") else 1), result
 
 
 def _preview_diff(
@@ -724,14 +733,18 @@ def _cmd_import(argv: list[str], root: Path) -> int:
         else:
             print(f"Imported {report['imported']}. Already present {report['already_present']}. "
                   f"Withheld by the remembering policy {report['withheld_by_policy']}. Failed {report['failed']}.")
-            if report["truncated"]:
-                print("The source held more than one import takes; run it again on the rest.")
+            if report["left_for_next_run"]:
+                print(f"{report['left_for_next_run']} more were left for the next run. "
+                      "Run the same command again to continue.")
             if report["profile_draft"]:
                 if report["rule_like_lines"]:
                     print(f"A profile change with {report['rule_like_lines']} line(s) waits for your decision.")
                 else:
                     print("The profile change drafted from this source still waits for your decision.")
                 print("Decide it in a terminal:  twinaatma self review")
+            if report["rules_left_for_next_run"]:
+                print(f"{report['rules_left_for_next_run']} more rule-like line(s) are saved as notes but not "
+                      "drafted yet. Decide this draft, then run the same command again.")
             elif report.get("profile_draft_error"):
                 print(f"No profile change was drafted: {report['profile_draft_error']}")
     worked = report["found"] > 0 and not report["failed"]

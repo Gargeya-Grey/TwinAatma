@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from support import SelfGuard, TempVaultCase
 
@@ -145,6 +146,62 @@ class ImportMemory(ImportCase):
         guard.assert_unchanged(self)
         accepted = self.api().accept_self_update(report["profile_draft"] or "none.md")
         self.assertIn("error", accepted)
+
+    def test_a_source_marked_private_is_withheld(self):
+        for name, marker in (("a.md", "privacy: private"), ("b.md", "do_not_remember: true")):
+            with self.subTest(marker=marker):
+                before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
+                source = self.source(name, f"---\n{marker}\n---\n\n- Prefers the copper meadow route to work.\n"
+                                           "- Always carries the copper meadow key.\n")
+                report = importer.import_path(self.api(), source, "Marked")
+                self.assertEqual((report["found"], report["imported"], report["withheld_by_policy"]), (2, 0, 2),
+                                 report)
+                self.assertIsNone(report["profile_draft"])
+                self.assertEqual(sorted(p.name for p in (self.vault / "Inbox").iterdir()), before)
+                self.assertNotIn("copper meadow", repr(report))
+
+    def test_a_folder_that_holds_the_vault_is_refused(self):
+        before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
+        report = importer.import_path(self.api(), self.root, "Everything")
+        self.assertEqual((report["found"], report["files"]), (0, 0), report)
+        self.assertTrue(report["problems"])
+        self.assertEqual(sorted(p.name for p in (self.vault / "Inbox").iterdir()), before)
+
+    def test_a_large_source_continues_on_the_next_run(self):
+        source = self.source("many.md", "".join(f"- Fact number {n} about the warehouse layout.\n" for n in range(5)))
+        with mock.patch.object(importer, "MAX_ITEMS", 2):
+            runs = [importer.import_path(self.api(), source, "Many", draft_profile=False) for _ in range(3)]
+        self.assertEqual([(r["imported"], r["already_present"], r["left_for_next_run"]) for r in runs],
+                         [(2, 0, 3), (2, 2, 1), (1, 4, 0)])
+        self.assertEqual([r["found"] for r in runs], [5, 5, 5])
+
+    def test_rules_beyond_one_draft_continue_after_the_decision(self):
+        source = self.source("rules.md", "- Always reviews the diff twice.\n- Never merges on a Friday.\n"
+                                         "- Prefers small commits over large ones.\n")
+        with mock.patch.object(importer, "MAX_RULES", 2):
+            first = importer.import_path(self.api(), source, "Rules")
+            self.assertEqual((first["rule_like_lines"], first["rules_left_for_next_run"]), (2, 1), first)
+            self.assertTrue(self.approve(first["profile_draft"]).get("ok"))
+            second = importer.import_path(self.api(), source, "Rules")
+        self.assertEqual((second["rule_like_lines"], second["rules_left_for_next_run"]), (1, 0), second)
+        self.assertIn("Prefers small commits", (self.vault / second["profile_draft"]).read_text(encoding="utf-8"))
+
+    def test_files_beyond_the_limit_are_reported(self):
+        self.source("pile/one.md", "The first file holds one fact.\n")
+        self.source("pile/two.md", "The second file holds another fact.\n")
+        with mock.patch.object(importer, "MAX_FILES", 1):
+            report = importer.import_path(self.api(), self.root / "exports" / "pile", "Pile", draft_profile=False)
+        self.assertEqual(report["files"], 1)
+        self.assertTrue(any("1 file(s) beyond" in problem for problem in report["problems"]), report["problems"])
+
+    def test_each_note_from_a_folder_names_its_file(self):
+        self.source("agent/CLAUDE.md", "- Write to me in short sentences with literal words.\n")
+        self.source("agent/memory/project.md", "- Write to me in short sentences with literal words.\n")
+        report = importer.import_path(self.api(), self.root / "exports" / "agent", "Agent files", draft_profile=False)
+        self.assertEqual(report["imported"], 2, report)
+        texts = sorted((self.vault / path).read_text(encoding="utf-8") for path in report["paths"])
+        self.assertIn("file CLAUDE.md", texts[0] + texts[1])
+        self.assertIn("file memory/project.md", texts[0] + texts[1])
 
     def test_a_folder_of_agent_files_is_imported(self):
         self.source("agent/CLAUDE.md", "- Write to me in short sentences with literal words.\n")

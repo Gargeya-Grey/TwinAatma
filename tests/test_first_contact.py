@@ -95,6 +95,20 @@ class CleanStarter(FirstContactCase):
         self.assertEqual([p for p in paths if p.startswith(("MOCs/", "Templates/")) or p.endswith("/_Index.md")],
                          [], paths)
 
+    def test_a_page_whose_title_matches_the_task_is_still_not_offered(self):
+        api = self.api()
+        drafted = api.propose_self_update("Quarterly invoices rule", "heuristics",
+                                          "* Send quarterly invoices on the first Monday.", "Said so.", "append")
+        self.assertIn("proposal_path", drafted, drafted)
+        for hint in ("Quarterly invoices rule", "Master MOC", "Self proposal heuristics"):
+            with self.subTest(hint=hint):
+                relevant = self.api().session_start(task_hint=hint)["context"]["relevant"]
+                offered = [row.get("path", "") for rows in relevant.values() if isinstance(rows, list)
+                           for row in rows if isinstance(row, dict)]
+                self.assertEqual([p for p in offered if p.startswith(("People/Self-Proposals/", "MOCs/", "Templates/"))],
+                                 [], offered)
+                self.assertNotIn("first Monday", repr(relevant))
+
     def test_a_real_memory_still_reaches_the_first_context(self):
         captured = self.remember("Berlin offer", "The Berlin job offer pays less but the team is stronger.")
         started = self.api().session_start(task_hint="decide whether to take the Berlin job")

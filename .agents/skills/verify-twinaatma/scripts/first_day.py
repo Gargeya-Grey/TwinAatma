@@ -97,6 +97,11 @@ def run(journey: Journey) -> None:
     made = cli("init", vault, "--name", "Asha", "--non-interactive")
     check("init makes a vault", made.returncode == 0 and (journey.vault / "People" / "Self.md").is_file(),
           made.stderr)
+    profile = (journey.vault / "People" / "Self.md").read_bytes()
+
+    def profile_unchanged(after: str) -> None:
+        check(f"the profile is unchanged after {after}",
+              (journey.vault / "People" / "Self.md").read_bytes() == profile)
     contract = (journey.vault / "AGENTS.md").read_text(encoding="utf-8")
     check("the starter contract holds no toolkit development text",
           "toolkit-dev" not in contract and "outputs/handoffs" not in contract)
@@ -113,6 +118,7 @@ def run(journey: Journey) -> None:
     again = chat.tool("memory_session_start", task_hint="next task")
     check("the first-run question is asked once", FIRST_RUN_WORDS not in (again.get("soft_prompt") or ""))
     chat.close()
+    profile_unchanged("the first chat and a capture")
 
     dry = cli("import", str(source), "--vault", vault, "--label", "Other assistant", "--dry-run")
     check("a dry run writes nothing", dry.returncode == 0 and "nothing written" in dry.stdout
@@ -125,13 +131,12 @@ def run(journey: Journey) -> None:
     repeat = cli("import", str(source), "--vault", vault, "--label", "Other assistant")
     check("a second import adds nothing", "Imported 0. Already present 5." in repeat.stdout, repeat.stdout)
     check("a second import drafts no second profile change", len(journey.drafts()) == 1, journey.drafts())
+    profile_unchanged("three imports")
 
-    profile = (journey.vault / "People" / "Self.md").read_bytes()
     review = cli("self", "review", "--vault", vault)
     check("review refuses without a terminal", review.returncode == 2 and "terminal" in review.stderr,
           review.stderr)
-    check("the profile is unchanged by everything above",
-          (journey.vault / "People" / "Self.md").read_bytes() == profile and "Postgres" not in profile.decode())
+    profile_unchanged("a review without a terminal")
 
     chat = journey.server()
     second = chat.tool("memory_session_start",
@@ -153,6 +158,7 @@ def run(journey: Journey) -> None:
     refused = chat.tool("memory_accept_self_update", proposal_path=(journey.drafts() or ["none.md"])[0])
     check("an agent cannot approve the draft", refused.get("ok") is not True and "error" in refused, refused)
     chat.close()
+    profile_unchanged("the second chat and a refused agent approval")
     held = [path.name for path in journey.vault.rglob("*.md")
             if SECRET in path.read_text(encoding="utf-8", errors="replace")]
     check("the credential is in no note", held == [], held)

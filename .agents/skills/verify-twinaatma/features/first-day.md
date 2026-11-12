@@ -5,7 +5,7 @@ A new person installs once, connects the hosts they chat in, brings in what anot
 ## Sub-features
 
 - DAY.1. The first chat of an empty profile asks one plain question, once, and carries the steps the agent follows.
-- DAY.2. `twinaatma import` turns an assistant export or agent files into ordinary notes, withholds what the remembering policy refuses, and is safe to repeat.
+- DAY.2. `twinaatma import` turns an assistant export or agent files into ordinary notes, withholds what the remembering policy refuses, and is safe to repeat. A source file whose own frontmatter marks it private or not to be remembered is withheld whole. A source inside the vault, or a folder that holds the vault, is refused. One run writes at most 500 new notes and drafts at most 12 rules; it reports what is left, and the same command continues. Each note from a folder names its file.
 - DAY.3. Rule-like lines become one profile draft. `twinaatma self review` decides every waiting draft in one sitting, in a real terminal only.
 - DAY.4. `memory_search` keeps `ranked` for notes that hold every word. Notes that hold some words go in `possibly_related`, with a note that says so.
 - DAY.5. Starter pages, templates and undecided drafts are not offered as memory. A search that names one on purpose still finds it.
@@ -19,7 +19,7 @@ A new person installs once, connects the hosts they chat in, brings in what anot
 
 Preconditions: a new task-owned output directory. The driver sets its own `KNOWLEDGEOS_STATE_DIR`.
 
-- Source journey. Run `python -B .agents/skills/verify-twinaatma/scripts/first_day.py --output <new-dir>`. It drives the real command line and the real MCP stdio server on a synthetic vault: init, first chat, capture, dry run, import, repeated import, review refusal, second chat, three searches, agent approval refusal, both user-level command lines, the Claude Code project file and doctor. It prints one PASS or FAIL line per check and writes `report.json`. It makes no model call, so it earns no host acceptance credit.
+- Source journey. Run `python -B .agents/skills/verify-twinaatma/scripts/first_day.py --output <new-dir>`. It drives the real command line and the real MCP stdio server on a synthetic vault: init, first chat, capture, dry run, import, repeated import, review refusal, second chat, three searches, agent approval refusal, both user-level command lines, the Claude Code project file and doctor. It compares `People/Self.md` with its state right after init after every stage. It prints one PASS or FAIL line per check and writes `report.json`. It makes no model call, so it earns no host acceptance credit.
 - Unit suites. `python -B -m unittest discover -s tests -p "test_first_contact.py"`, and the same for `test_import_memory.py`, `test_import_command.py` and `test_user_level_setup.py`.
 - Owner review. `self review` needs a real console. A person runs it; the suites patch the console check and type `y`, `d` and `n`. Never answer a real approval prompt from an agent.
 - User-level setup. The suites replace the host command with a recorder. To prove a real registration, a person runs `twinaatma setup-host --host claude-code --global` and then `claude mcp get knowledgeos`. An agent must not change the owner's host configuration without being asked.
