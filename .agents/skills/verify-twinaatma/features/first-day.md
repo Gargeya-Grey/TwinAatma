@@ -4,7 +4,7 @@ A new person installs once, connects the hosts they chat in, brings in what anot
 
 ## Sub-features
 
-- DAY.1. The first chat of an empty profile asks one plain question, once, and carries the steps the agent follows.
+- DAY.1. The first chat of a new vault (an empty profile and no note of the person's own) asks one plain question, once, and carries the steps the agent follows. A follow-up that is due comes before it. A vault that already holds the person's notes gets no first-run question.
 - DAY.2. `twinaatma import` turns an assistant export or agent files into ordinary notes, withholds what the remembering policy refuses, and is safe to repeat. A source file whose own frontmatter marks it private or not to be remembered is withheld whole. A source inside the vault, or a folder that holds the vault, is refused, and a file with a second name (a hard link) is skipped. A folder with more than 200 text files is refused whole unless `--many-files` is passed. One run writes at most 500 new notes and drafts at most 12 rules; it reports what is left, and the same command continues. A rule is drafted once: a rule in the profile, in a waiting draft, or in a draft the person decided (a rejected one too) is not drafted again. Rules are compared as whole lines, and notes by their exact text. Each note from a folder names its file.
 - DAY.3. Rule-like lines become one profile draft. `twinaatma self review` decides every waiting draft in one sitting, in a real terminal only.
 - DAY.4. `memory_search` keeps `ranked` for notes that hold every word. Notes that hold some words go in `possibly_related`, with a note that says so.

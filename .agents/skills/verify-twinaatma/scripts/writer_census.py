@@ -196,7 +196,9 @@ def read_census(root):
             for comparator in node.comparators:
                 values = comparator.elts if isinstance(comparator, (ast.Set, ast.Tuple, ast.List)) else [comparator]
                 cli.update(v.value for v in values if isinstance(v, ast.Constant) and isinstance(v.value, str))
-    require_cli = {"hook", "doctor", "validate", "ids", "self", "init", "memory", "breathe", "mcp", "setup-host", "version", "--version", "-V"}
+    # `import` adds no writer of its own: every note goes through MemoryAPI.capture and
+    # the profile draft through MemoryAPI.propose_self_update.
+    require_cli = {"hook", "doctor", "validate", "ids", "self", "init", "import", "memory", "breathe", "mcp", "setup-host", "version", "--version", "-V"}
     if cli != require_cli:
         raise ValueError("Unreviewed public CLI caller drift: " + repr(sorted(cli ^ require_cli)))
     entries = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8-sig")).get("project", {}).get("scripts", {})

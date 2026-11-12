@@ -243,6 +243,28 @@ def confirmed_sections(identity: Any) -> dict[str, str]:
     return confirmed
 
 
+def has_own_notes(api: Any) -> bool:
+    """True when the vault holds a note of the person's own.
+
+    The starter pages, the templates, undecided drafts and the profile do not count. The
+    first-run question says "I don't know much about you yet". That is false for a
+    person whose vault already holds their notes, so they are not asked. When the index
+    cannot be read, the answer is True: no question is better than a wrong one.
+    """
+    from knowledgeos.search import without_scaffold
+
+    try:
+        conn = api._conn()
+        try:
+            rows = [{"path": str(row[0]), "type": str(row[1] or "")}
+                    for row in conn.execute("SELECT path, type FROM notes")]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - any unreadable index means "do not ask"
+        return True
+    return any(row["path"].casefold() != "people/self.md" for row in without_scaffold(rows))
+
+
 def soft_prompt_for_human(
     ops: dict[str, Any], orphan_unsaved: bool = False, asked: set[str] | None = None,
     profile_empty: bool = False,
@@ -261,8 +283,6 @@ def soft_prompt_for_human(
     if fresh:
         key = str(fresh[0].get("path") or fresh[0].get("proposal_path") or "")
         return "Want me to remember that preference going forward?", key
-    if profile_empty and ONBOARDING_KEY not in asked:
-        return _ONBOARDING_PROMPT, ONBOARDING_KEY
     from knowledgeos.evolution import outcome_review_due
 
     pending = ops.get("due_outcomes", ops.get("pending_outcomes")) or []
@@ -271,6 +291,9 @@ def soft_prompt_for_human(
         title = _plain_excerpt(unstuck[0].get("title") or "that earlier decision")
         key = str(unstuck[0].get("path") or "")
         return f"Quick check — how did “{title}” turn out?", key
+    # Last: the first-run question is the least urgent thing to ask.
+    if profile_empty and ONBOARDING_KEY not in asked:
+        return _ONBOARDING_PROMPT, ONBOARDING_KEY
     return None, None
 
 
@@ -378,7 +401,7 @@ def _breathe(
     else:
         soft, soft_key = soft_prompt_for_human(
             ops, orphan_unsaved=orphan, asked=asked,
-            profile_empty=profile_is_empty(ctx.get("self")),
+            profile_empty=profile_is_empty(ctx.get("self")) and not has_own_notes(api),
         )
         if soft_key:
             asked.add(soft_key)

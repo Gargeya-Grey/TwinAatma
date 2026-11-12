@@ -226,6 +226,13 @@ class FirstRunQuestion(FirstContactCase):
             self.start()
         guard.assert_unchanged(self)
 
+    def test_a_person_whose_vault_already_holds_their_notes_is_not_asked(self):
+        kept = MemoryAPI(self.fresh).capture("Launch date", "The product launch is on Thursday.")
+        self.assertTrue(kept.get("ok"), kept)
+        started = self.start()
+        self.assertNotIn("tell me a few things", started["soft_prompt"] or "")
+        self.assertNotIn("onboarding", started)
+
     def test_a_background_warm_up_does_not_spend_the_question(self):
         from knowledgeos.autopilot import breathe
 
