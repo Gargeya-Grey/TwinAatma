@@ -1,14 +1,5 @@
 # AGENTS.md — TwinAatma Operating Contract
 
-## Resume paused project work
-
-When the owner asks to continue this project's acceptance work, read
-`outputs/handoffs/resume-claude-20261022-paused.md` before planning or editing.
-It is the shared Codex and Claude Code handoff, including preserved changes,
-evidence, remaining defects and authorization limits. Work remains paused until
-the owner asks to resume. Recheck the current checkout before relying on its
-saved state; preserve newer changes and record the next handoff there.
-
 You are operating inside a **TwinAatma** vault (technical toolkit: KnowledgeOS / `knowledgeos`): the user's portable long-term memory and Self-model.
 
 ## Product promise (non-negotiable)
@@ -29,7 +20,9 @@ Speak about “remembering” / “your preferences” to the user. Prefer **not
 | Need past context | `memory_search` / `memory_get_note` / `memory_related` / `memory_decisions` | Magical relevance |
 | User shares something worth keeping | `memory_capture` | Persist without asking them to "save" |
 | Stable preference / rule changes | `memory_propose_self_update` → soft yes/no | Self never silent-writes |
-| User agrees | They run `twinaatma self approve <file>` themselves | Apply — see below |
+| User agrees | They run `twinaatma self approve <file>` themselves (`twinaatma self review` decides every waiting draft in one sitting) | Apply — see below |
+| Profile still empty (`onboarding` is set) | Ask the soft prompt once, capture what they share, draft their rules | First chat becomes useful |
+| They have memory in another assistant | They run `twinaatma import <file>` themselves | Day one starts with what they already told another assistant |
 | User declines | `memory_reject_self_update` | Archive |
 | Useful work wrapping up | `memory_session_end` with that `session_id` + short summary | Episodic memory + freshen index |
 
@@ -74,3 +67,14 @@ Never dump JSON, tool names, or KnowledgeOS branding on the user unless they ask
 ## If tools fail
 
 Help with general reasoning. Say memory is temporarily unreachable. Do **not** hand them an ops manual — suggest only that setup/MCP may need a quick check (one-time class of problem).
+
+<!-- toolkit-dev:begin -->
+## Working on the toolkit itself
+
+This section is for agents that change TwinAatma's own code in this repository.
+`twinaatma init` leaves it out of a person's vault.
+
+Read `docs/product-direction.md` for what is built next, and
+`outputs/handoffs/CURRENT.md` for the latest handoff. Recheck the checkout before you
+rely on saved state.
+<!-- toolkit-dev:end -->

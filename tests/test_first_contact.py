@@ -1,0 +1,179 @@
+"""What a new user meets in the first chat: plain questions, a clean starter, easy capture."""
+from __future__ import annotations
+
+import unittest
+
+from support import ROOT, TempVaultCase
+
+from knowledgeos.memory import MemoryAPI, dispatch
+
+
+class FirstContactCase(TempVaultCase):
+    def remember(self, title: str, content: str) -> str:
+        result = self.api().capture(title, content)
+        self.assertTrue(result.get("ok"), result)
+        return result["path"]
+
+    def ranked_paths(self, payload: dict) -> list[str]:
+        return [row["path"] for row in payload.get("ranked", [])]
+
+    def offered_paths(self, payload: dict) -> list[str]:
+        """What the caller can read next: the answer, or the labelled possibly-related list."""
+        return self.ranked_paths(payload) + [row["path"] for row in payload.get("possibly_related", [])]
+
+
+class PlainQuestionSearch(FirstContactCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.billing = self.remember(
+            "Billing DB choice",
+            "Decided to use Postgres instead of MongoDB for the billing service because we need "
+            "transactions across invoices and ledger rows.",
+        )
+        self.travel = self.remember(
+            "Travel preference",
+            "I prefer flying out on morning flights because travel that eats into the evening "
+            "makes me anxious. Aisle seat always.",
+        )
+        self.mira = self.remember(
+            "Mira",
+            "My daughter Mira's birthday is March 14. She loves dinosaurs. Allergic to peanuts.",
+        )
+
+    def test_a_plain_question_finds_the_note_that_answers_it(self):
+        cases = {
+            "what database did we pick for billing": self.billing,
+            "which datastore for invoices": self.billing,
+            "when should I book flights": self.travel,
+            "food allergies": self.mira,
+            "kid gift ideas": self.mira,
+        }
+        for question, expected in cases.items():
+            with self.subTest(question=question):
+                payload = self.api().search(question)
+                self.assertIn(expected, self.offered_paths(payload)[:5], payload)
+
+    def test_a_note_with_only_some_of_the_words_is_never_the_answer(self):
+        payload = self.api().search("what database did we pick for billing")
+        self.assertEqual(payload["ranked"], [], payload)
+        self.assertIn(self.billing, [row["path"] for row in payload["possibly_related"]])
+        self.assertIn("ranked", payload["possibly_related_note"])
+
+    def test_an_exact_answer_carries_no_possibly_related_list(self):
+        payload = self.api().search("Postgres billing")
+        self.assertEqual(self.ranked_paths(payload)[:1], [self.billing])
+        self.assertNotIn("possibly_related", payload)
+        self.assertNotIn("possibly_related_note", payload)
+
+    def test_a_possibly_related_row_is_read_from_the_note(self):
+        path = self.vault / self.billing
+        path.write_text(path.read_text(encoding="utf-8").replace("billing", "payroll").replace("Billing", "Payroll"),
+                        encoding="utf-8")
+        payload = self.api().search("what database did we pick for billing")
+        for row in payload.get("possibly_related", []):
+            if row["path"] == self.billing:
+                self.assertNotIn("billing", row.get("snippet", "").lower(), row)
+
+    def test_a_question_nothing_supports_offers_nothing(self):
+        payload = self.api().search("zebra quokka xylophone")
+        self.assertEqual(payload.get("ranked"), [], payload)
+        self.assertNotIn("possibly_related", payload)
+
+    def test_a_private_note_is_never_possibly_related(self):
+        self.write("Concepts/Private.md", "---\ntype: concept\ntitle: Private ledger\nprivacy: private\n---\n"
+                                           "The billing database password hint is copper meadow.\n")
+        payload = self.api().search("what database did we pick for billing")
+        self.assertNotIn("copper meadow", repr(payload))
+        self.assertNotIn("Concepts/Private.md", repr(payload))
+
+
+class CleanStarter(FirstContactCase):
+    def test_starter_pages_are_not_offered_as_memory(self):
+        api = self.api()
+        started = api.session_start(task_hint="plan my week and decide whether to take the Berlin job")
+        paths = self.ranked_paths(started["context"]["relevant"])
+        self.assertEqual([p for p in paths if p.startswith(("MOCs/", "Templates/")) or p.endswith("/_Index.md")],
+                         [], paths)
+
+    def test_a_real_memory_still_reaches_the_first_context(self):
+        captured = self.remember("Berlin offer", "The Berlin job offer pays less but the team is stronger.")
+        started = self.api().session_start(task_hint="decide whether to take the Berlin job")
+        self.assertIn(captured, self.ranked_paths(started["context"]["relevant"]))
+
+    def test_a_map_page_can_still_be_searched_on_purpose(self):
+        payload = self.api().search("Master MOC")
+        self.assertIn("MOCs/_MOC_Master.md", self.ranked_paths(payload))
+
+    def test_the_starter_contract_holds_no_toolkit_development_text(self):
+        text = (self.vault / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Product promise", text)
+        for leaked in ("outputs/handoffs", "acceptance work", "toolkit-dev"):
+            self.assertNotIn(leaked, text)
+
+
+class EasyCapture(FirstContactCase):
+    def test_capture_needs_only_the_thought(self):
+        result = dispatch(MemoryAPI(self.vault), "memory_capture",
+                          {"content": "Mira is allergic to peanuts. Keep snacks nut free."})
+        self.assertTrue(result.get("ok"), result)
+        text = (self.vault / result["path"]).read_text(encoding="utf-8")
+        self.assertIn("title: Mira is allergic to peanuts", text)
+
+    def test_capture_with_nothing_to_keep_is_refused(self):
+        result = dispatch(MemoryAPI(self.vault), "memory_capture", {})
+        self.assertIn("error", result)
+
+    def test_a_title_alone_is_still_a_capture(self):
+        result = dispatch(MemoryAPI(self.vault), "memory_capture", {"title": "Call the dentist"})
+        self.assertTrue(result.get("ok"), result)
+
+
+class FirstRunQuestion(FirstContactCase):
+    """A person nobody has asked yet is asked once. `fresh` is a vault straight from init."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        from knowledgeos.init_vault import init_vault
+
+        self.fresh = self.root / "fresh"
+        init_vault(self.fresh, source_root=ROOT, owner_name="New Person", non_interactive=True)
+
+    def start(self, vault=None, hint: str = "help me plan my week") -> dict:
+        return MemoryAPI(vault or self.fresh).session_start(task_hint=hint)
+
+    def test_an_empty_profile_gets_one_plain_question_and_the_steps(self):
+        started = self.start()
+        self.assertIn("tell me a few things", started["soft_prompt"] or "", started.get("soft_prompt"))
+        steps = " ".join(started.get("onboarding") or [])
+        for needed in ("memory_capture", "memory_propose_self_update", "twinaatma self review",
+                       "twinaatma import"):
+            self.assertIn(needed, steps)
+
+    def test_the_question_is_asked_once(self):
+        self.start()
+        again = self.start()
+        self.assertNotIn("tell me a few things", again["soft_prompt"] or "")
+        self.assertNotIn("onboarding", again)
+
+    def test_a_filled_profile_is_not_asked(self):
+        started = self.start(self.vault)
+        self.assertNotIn("tell me a few things", started["soft_prompt"] or "")
+        self.assertNotIn("onboarding", started)
+
+    def test_the_question_never_changes_the_profile(self):
+        from support import SelfGuard
+
+        with SelfGuard(self.fresh) as guard:
+            self.start()
+        guard.assert_unchanged(self)
+
+    def test_a_background_warm_up_does_not_spend_the_question(self):
+        from knowledgeos.autopilot import breathe
+
+        warm = breathe(MemoryAPI(self.fresh), "warm up", source="prewarm")
+        self.assertIsNone(warm["soft_prompt"])
+        self.assertIn("tell me a few things", self.start()["soft_prompt"] or "")
+
+
+if __name__ == "__main__":
+    unittest.main()

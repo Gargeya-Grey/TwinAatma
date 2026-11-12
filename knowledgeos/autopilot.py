@@ -199,8 +199,46 @@ def maybe_propose_weekly_drift(api: Any, state: dict[str, Any]) -> dict[str, Any
     return out
 
 
+_IDENTITY_SECTIONS = ("heuristics", "values", "mental_models", "anti_goals", "active_bets")
+_UNSET_SECTION = "Unknown. No owner-confirmed"
+_SECTION_MARKER = re.compile(r"<!--.*?-->", re.DOTALL)
+ONBOARDING_KEY = "onboarding"
+_ONBOARDING_PROMPT = (
+    "I don't know much about you yet. Want to tell me a few things, like what you work on "
+    "and how you like answers, so I can keep them in mind from now on?"
+)
+_ONBOARDING_STEPS = [
+    "The profile is empty. Ask soft_prompt once. If the person declines, drop it and help "
+    "with their task.",
+    "Save each fact they share with memory_capture.",
+    "Draft their standing rules and preferences with memory_propose_self_update in append "
+    "mode, at most one draft per section.",
+    "Then tell them in one sentence that the drafts wait for their own decision: "
+    "`twinaatma self review` in a terminal decides every draft in one sitting.",
+    "If they keep memory in another assistant, they can bring it in themselves with "
+    "`twinaatma import <file>`.",
+]
+
+
+def profile_is_empty(identity: Any) -> bool:
+    """True while every identity section still holds the text `init` wrote.
+
+    A profile that could not be read is not called empty: the first-run question is for
+    a person nobody has asked yet, not for a file that needs repair.
+    """
+    sections = identity.get("sections") if isinstance(identity, dict) else None
+    if not isinstance(sections, dict) or not sections:
+        return False
+    for key in _IDENTITY_SECTIONS:
+        body = _SECTION_MARKER.sub("", str(sections.get(key) or "")).strip()
+        if body and not body.startswith(_UNSET_SECTION):
+            return False
+    return True
+
+
 def soft_prompt_for_human(
-    ops: dict[str, Any], orphan_unsaved: bool = False, asked: set[str] | None = None
+    ops: dict[str, Any], orphan_unsaved: bool = False, asked: set[str] | None = None,
+    profile_empty: bool = False,
 ) -> tuple[str | None, str | None]:
     """At most one soft question — never chore language or product jargon.
 
@@ -216,6 +254,8 @@ def soft_prompt_for_human(
     if fresh:
         key = str(fresh[0].get("path") or fresh[0].get("proposal_path") or "")
         return "Want me to remember that preference going forward?", key
+    if profile_empty and ONBOARDING_KEY not in asked:
+        return _ONBOARDING_PROMPT, ONBOARDING_KEY
     from knowledgeos.evolution import outcome_review_due
 
     pending = ops.get("due_outcomes", ops.get("pending_outcomes")) or []
@@ -329,7 +369,10 @@ def _breathe(
         # the human has not changed their mind yet, and asking would be a chore.
         deferred = orphan
     else:
-        soft, soft_key = soft_prompt_for_human(ops, orphan_unsaved=orphan, asked=asked)
+        soft, soft_key = soft_prompt_for_human(
+            ops, orphan_unsaved=orphan, asked=asked,
+            profile_empty=profile_is_empty(ctx.get("self")),
+        )
         if soft_key:
             asked.add(soft_key)
             state["soft_prompts_asked"] = sorted(asked)
@@ -374,7 +417,8 @@ def _breathe(
             "Use Self heuristics/values/anti-goals/active bets from context before advising.",
             "Capture important ideas with memory_capture without asking the user to 'save'.",
             "When preferences change, memory_propose_self_update, then tell the human the "
-            "one command to approve it — never edit Self.md and never approve it yourself.",
+            "one command to approve it — never edit Self.md and never approve it yourself. "
+            "`twinaatma self review` decides every waiting draft in one sitting.",
             "If soft_prompt is set, ask it once in plain language (no product names).",
             "Near end of useful work, call memory_session_end with a short summary.",
         ],
@@ -394,6 +438,8 @@ def _breathe(
             "index_blocked": ops.get("index_blocked"),
         },
     }
+    if soft_key == ONBOARDING_KEY:
+        payload["onboarding"] = list(_ONBOARDING_STEPS)
     # `session_brief.md` used to be written here and nothing ever read it: a dead file
     # described in the docs as a feature. The payload itself is the brief — it goes
     # straight back to the agent that asked for it.

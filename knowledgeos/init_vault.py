@@ -97,6 +97,20 @@ class _Plan:
         self._write(dst, src.read_bytes())
 
 
+_TOOLKIT_DEV_BLOCK = re.compile(
+    rb"(?:\r?\n)*<!-- toolkit-dev:begin -->.*?<!-- toolkit-dev:end -->[ \t]*(?:\r?\n)?", re.DOTALL)
+
+
+def starter_contract(source: bytes) -> bytes:
+    """The agent contract a person's vault receives: the toolkit's own, minus its dev notes.
+
+    The repository root is both a vault and the toolkit's source, so its ``AGENTS.md``
+    also tells agents how to work on the toolkit. That part is not a person's concern.
+    """
+    stripped = _TOOLKIT_DEV_BLOCK.sub(b"\n" if b"\r\n" not in source else b"\r\n", source)
+    return stripped.rstrip(b"\r\n") + (b"\r\n" if b"\r\n" in source else b"\n")
+
+
 def _index_note(title: str, folder_desc: str, today: str) -> str:
     return f"""---
 type: index
@@ -431,10 +445,12 @@ def init_vault(
         plan.copy(example, target / "knowledgeos.config.example.json")
         plan.write(target / "knowledgeos.config.json", json.dumps(cfg, indent=2) + "\n")
 
-    for name in ("LICENSE", "AGENTS.md"):
-        src = source_root / name
-        if src.exists():
-            plan.copy(src, target / name)
+    license_file = source_root / "LICENSE"
+    if license_file.exists():
+        plan.copy(license_file, target / "LICENSE")
+    contract = source_root / "AGENTS.md"
+    if contract.exists():
+        plan._write(target / "AGENTS.md", starter_contract(plain_vault_path(source_root, contract).read_bytes()))
 
     src_rules = source_root / ".cursor" / "rules"
     if src_rules.exists():

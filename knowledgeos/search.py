@@ -62,6 +62,8 @@ _CONTEXT_SCAFFOLDING = _QUESTION_STOP_WORDS | {
 }
 # Reciprocal-rank constant for merging substring hits into the bm25 order.
 _FUSION_K = 60
+# Extra candidates fetched so that dropping navigation pages still leaves a full answer.
+_SCAFFOLD_POOL = 16
 _CONCEPT_INDEX: dict[str, tuple[int, ...]] | None = None
 
 
@@ -233,6 +235,25 @@ def _context_rows(conn: sqlite3.Connection, query: str, limit: int) -> list[dict
     return [dict(entry["row"], rank=-entry["score"]) for entry in ordered[:limit]]
 
 
+# Pages a vault uses to find its way around. They describe the vault, not the person,
+# so they are not offered as an answer to a task or a plain question. A search that
+# names one on purpose still finds it.
+_SCAFFOLD_TYPES = {"moc", "index", "template"}
+# A profile draft the person has not decided is a claim about them, not a memory of
+# them. Offering it as context would let a draft act as a rule before it is approved.
+_UNDECIDED_DRAFTS = "People/Self-Proposals/"
+_POSSIBLY_RELATED_NOTE = (
+    "No note contains every word of this query, so `ranked` is empty. The notes in "
+    "`possibly_related` contain some of its words or close ones. Read one before you rely "
+    "on it, and say so when none of them answers the question."
+)
+
+
+def _is_scaffold(path: str, note_type: str) -> bool:
+    return ((note_type or "").strip().lower() in _SCAFFOLD_TYPES
+            or path.startswith(("Templates/", _UNDECIDED_DRAFTS)))
+
+
 def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool = False) -> dict[str, Any]:
     from knowledgeos.remembering import RememberingPolicy, PolicyError, refusal
     from knowledgeos.database import checked_database_path
@@ -295,7 +316,7 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
     if fts_available:
         try:
             if context:
-                rows = _context_rows(conn, query, limit)
+                rows = _context_rows(conn, query, limit + _SCAFFOLD_POOL)
             else:
                 rows = _fts_rows(conn, _fts_query(query), limit)
             for r in rows:
@@ -303,6 +324,9 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
                     "SELECT type, status, entity_id FROM notes WHERE path = ?",
                     (r["path"],),
                 ).fetchone()
+                if context and (
+                        len(fts_hits) >= limit or _is_scaffold(r["path"], meta["type"] if meta else "")):
+                    continue
                 fts_hits.append(
                     {
                         "title": r["title"],
@@ -376,6 +400,32 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
                 }
     ranked = sorted(blended.values(), key=lambda x: (-x["score"], x["rank"], x.get("title") or "", x["path"]))
     results["ranked"] = ranked[:limit]
+    # A direct search answers only with notes that hold every word: a wrong note offered
+    # as the answer is worse than none. A plain question rarely repeats a note's words,
+    # though, so when the answer is empty the notes task context would find are offered
+    # in their own labelled list, never mixed into the answer.
+    possibly_related: list[dict[str, Any]] = []
+    if fts_available and not context and not ranked and not _needs_substring_fallback(query):
+        try:
+            for r in _context_rows(conn, query, limit + _SCAFFOLD_POOL):
+                if len(possibly_related) >= limit:
+                    break
+                meta = conn.execute(
+                    "SELECT type, status, entity_id FROM notes WHERE path = ?", (r["path"],),
+                ).fetchone()
+                if _is_scaffold(r["path"], meta["type"] if meta else ""):
+                    continue
+                possibly_related.append({
+                    "title": r["title"],
+                    "path": r["path"],
+                    "type": (meta["type"] if meta else ""),
+                    "status": (meta["status"] if meta else ""),
+                    "entity_id": (meta["entity_id"] if meta else ""),
+                    "snippet": (r["snippet"] or "")[:400],
+                    "rank": r["rank"],
+                })
+        except sqlite3.OperationalError:
+            possibly_related = []
     conn.close()
     try:
         from knowledgeos.memory import MemoryAPI
@@ -384,6 +434,13 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         for key, rows in list(results.items()):
             if isinstance(rows, list) and rows and isinstance(rows[0], dict):
                 results[key] = api._refresh_rows(rows, query, context=context)
+        if possibly_related:
+            # Found the way task context finds notes, so re-tested against the files the
+            # same way.
+            possibly_related = api._refresh_rows(possibly_related, query, context=True)
+        if possibly_related:
+            results["possibly_related"] = possibly_related
+            results["possibly_related_note"] = _POSSIBLY_RELATED_NOTE
         return RememberingPolicy(db_path.parent).release(results)
     except PolicyError as error:
         return refusal(error)

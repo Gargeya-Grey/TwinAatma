@@ -492,8 +492,13 @@ class MemoryAPI:
                 # "Self heuristics". The index is a cache; the file is the note. Every
                 # row is re-derived from the file before it is returned.
                 rows = self._live_rows(value)
-                rows = self._refresh_rows(rows, query, context=context)
+                # `possibly_related` was found the way task context finds notes, so it is
+                # re-tested against the files the same way.
+                rows = self._refresh_rows(rows, query, context=context or key == "possibly_related")
                 payload[key] = rows
+        if not payload.get("possibly_related"):
+            payload.pop("possibly_related", None)
+            payload.pop("possibly_related_note", None)
         if self.index_locked and not self.index_blocked:
             # The results above are re-derived from the files, so nothing here is stale —
             # but they came from a *set* of rows the index froze earlier, so a note added
@@ -1772,7 +1777,12 @@ TOOL_SPECS = [
     },
     {
         "name": "memory_search",
-        "description": "Search the KnowledgeOS vault (titles, tags, projects, descriptions, body).",
+        "description": (
+            "Search the KnowledgeOS vault (titles, tags, projects, descriptions, body). "
+            "`ranked` holds only notes that contain every word of the query. When it is "
+            "empty, `possibly_related` may list notes that contain some of the words or "
+            "close ones: read one with memory_get_note before you rely on it."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1830,7 +1840,10 @@ TOOL_SPECS = [
     },
     {
         "name": "memory_capture",
-        "description": "Capture a raw thought into Inbox/ (auto-write allowed).",
+        "description": (
+            "Remember something worth keeping (auto-write allowed). Pass the thought as "
+            "content; a title is optional and is taken from the first sentence when absent."
+        ),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -1841,7 +1854,7 @@ TOOL_SPECS = [
                 "privacy": {"type": "string", "enum": ["ordinary", "exclude", "credential", "sensitive-third-party"],
                             "default": "ordinary", "description": "Explicit exclusion metadata overrides automatic capture."},
             },
-            "required": ["title"],
+            "required": [],
         },
     },
     {
@@ -2085,6 +2098,26 @@ def _missing_args(name: str, args: dict[str, Any]) -> list[str]:
     return missing
 
 
+def title_from_text(text: Any, max_len: int = 70) -> str:
+    """A short title from a thought's first sentence, for a capture given without one."""
+    words = " ".join(str(text or "").split())
+    first = re.split(r"(?<=[.!?])\s", words, maxsplit=1)[0]
+    if len(first) > max_len:
+        first = first[:max_len].rsplit(" ", 1)[0]
+    return first.rstrip(" .:;,-")
+
+
+def _capture_call(api: MemoryAPI, args: dict[str, Any]) -> dict[str, Any]:
+    title = args.get("title") if isinstance(args.get("title"), str) else ""
+    content = args.get("content") if isinstance(args.get("content"), str) else ""
+    if not title.strip() and not content.strip():
+        return {"error": "memory_capture requires content or title", "missing": ["content"]}
+    return api.capture(
+        title if title.strip() else (title_from_text(content) or "capture"),
+        content, args.get("tags"), args.get("request_id"), args.get("privacy", "ordinary"),
+    )
+
+
 def dispatch(api: MemoryAPI, name: str, arguments: dict[str, Any] | None = None) -> Any:
     from knowledgeos import evolution
 
@@ -2117,11 +2150,7 @@ def dispatch(api: MemoryAPI, name: str, arguments: dict[str, Any] | None = None)
             _as_int(args.get("limit", 50), 50),
         ),
         "memory_drift": lambda: api.drift(_as_int(args.get("days", 30), 30)),
-        "memory_capture": lambda: api.capture(
-            args.get("title", "capture"),
-            args.get("content", ""),
-            args.get("tags"), args.get("request_id"), args.get("privacy", "ordinary"),
-        ),
+        "memory_capture": lambda: _capture_call(api, args),
         "memory_record_outcome": lambda: api.record_outcome(
             args.get("path", ""), args.get("expected_sha256", ""), args.get("outcome_status", ""),
             args.get("actual_outcome", ""), args.get("lesson", ""),
