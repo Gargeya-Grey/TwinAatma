@@ -5,50 +5,72 @@
 <h1 align="center">TwinAatma</h1>
 
 <p align="center">
-  <strong>The twin of your Self</strong> — private cognitive memory any AI can load, that stays current as you live.
+  <strong>The memory you own and carry between AI assistants</strong> — and that no agent can quietly rewrite.
 </p>
 
 <p align="center">
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.9%2B-blue.svg" alt="Python 3.9+" /></a>
   <a href="https://obsidian.md/"><img src="https://img.shields.io/badge/Obsidian-compatible-purple.svg" alt="Obsidian compatible" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License" /></a>
-  <a href="#-one-time-setup-wire-mcp"><img src="https://img.shields.io/badge/AI-Ready-orange.svg" alt="AI Ready" /></a>
+  <a href="#-first-day"><img src="https://img.shields.io/badge/AI-Ready-orange.svg" alt="AI Ready" /></a>
 </p>
 
 **Public name:** TwinAatma *(Twin-AAT-maa — twin + aatma, self/soul)*
 **Technical package:** `knowledgeos` (legacy name; may appear in schema ids and paths)
 
-**Your job:** wire the MCP Memory server once.
-**The agent's job:** load your Self, search memory, capture what matters, propose twin updates, and ask only for high-leverage yes/no. See [AGENTS.md](AGENTS.md).
+Every assistant now remembers you, but each one keeps that memory on its own servers,
+and you cannot take it with you. TwinAatma keeps it on your disk instead:
 
-Local-first cognitive memory: markdown you own, an MCP Memory API any agent can call, and a Self-model updated through explicit yes/no — never silent rewrites.
+- **You own it.** Plain markdown files in a folder. No account, no cloud, no dependency
+  beyond Python.
+- **You carry it.** Any assistant that speaks MCP loads the same memory: Claude Code,
+  Codex, Cursor, VS Code, Claude Desktop, Windsurf. You can bring in what another
+  assistant already knows about you.
+- **No agent can quietly rewrite it.** Agents save facts freely. Your profile
+  (`People/Self.md`) changes only when you read the change and say yes in a terminal.
+  A tool call cannot do that for you.
+
+**Your job:** set it up once. **The agent's job:** load your profile, find what matters,
+keep what you share, and draft profile changes for you to decide. See [AGENTS.md](AGENTS.md).
 
 ---
 
-## 🔌 One-time setup
+## 🚀 First day
 
-Pick one:
-
-**A. Binary (no Python required)**
-
-```bash
-twinaatma init C:\Users\you\brain --name "Your Name"
-cd C:\Users\you\brain
-twinaatma setup-host --host cursor --write
-```
-
-**B. From source (Python 3.9+)**
-
-The library and CLI run on 3.9. Generating an MCP server command from a *source checkout*
-needs 3.11+, because it uses `python -P` to keep the vault off `sys.path`; on 3.9/3.10 use
-`pip install -e .` (which installs a console script) or the packaged binary instead.
+About five minutes. Python 3.9 or newer (3.11 or newer when you run from a source
+checkout without installing).
 
 ```bash
-pip install -e .
-twinaatma init ./my-brain --name "Your Name"
-cd ./my-brain
-twinaatma setup-host --host cursor --write
+pip install git+https://github.com/Gargeya-Grey/TwinAatma   # 1. install
+twinaatma init brain --name "Your Name"                     # 2. make your vault
+cd brain
+twinaatma setup-host --host claude-code --global            # 3. connect where you chat
 ```
+
+Step 3 registers the vault for **every project**, through the host's own command.
+`--host codex --global` does the same for Codex. Add `--print` to see the command
+without running it. Other hosts read a project file instead: run
+`twinaatma setup-host --host cursor --write` inside the vault (`vscode` works the same
+way; `claude-desktop` and `windsurf` take `--print` and a paste).
+
+**4. Bring what another assistant already knows (optional).** Ask that assistant to
+"list everything you remember about me as a bulleted list", save the answer as a text
+file, then:
+
+```bash
+twinaatma import ~/Downloads/assistant-memory.md --label "ChatGPT memory"
+twinaatma self review
+```
+
+`import` also reads a `CLAUDE.md`, an `AGENTS.md`, or a folder of agent memory files.
+It only reads the source. Each fact becomes an ordinary note; what the remembering
+policy recognises as a credential is withheld; importing the same file twice adds nothing.
+Lines that read like standing rules become **one profile draft**. `self review` shows you
+every waiting draft once: `y` applies it, `d` discards it, anything else keeps it for
+later. `--dry-run` counts what an import would do and writes nothing.
+
+**5. Chat.** In the first chat the assistant asks once whether you want to tell it a few
+things about yourself. Answer or skip it.
 
 `init` creates the folders, `People/Self.md`, Agent rules, the Cursor hook *config*, a
 project MCP config at `.cursor/mcp.json`, and a ready search index. It never overwrites
@@ -105,6 +127,7 @@ Self writes are **proposal-only**, and only *you* can apply them:
 twinaatma memory memory_propose_self_update \
   --summary "..." --section heuristics --proposed-markdown "..."
 twinaatma self pending                       # what is waiting for you
+twinaatma self review                        # decide every waiting draft in one sitting
 twinaatma self approve <file>                # reads it, asks y/N — needs a terminal
 twinaatma memory memory_reject_self_update --path People/Self-Proposals/<file>.md
 ```
@@ -136,7 +159,8 @@ twinaatma doctor                   # environment + vault diagnostics
 twinaatma validate                 # frontmatter and link health
 twinaatma ids assign [--write]     # stable kos:<type>:<slug> ids
 twinaatma self summary             # parsed ego node as JSON
-twinaatma setup-host --help        # hosts: codex, cursor, vscode, claude-desktop, windsurf
+twinaatma import <file|folder>     # bring in memory from another assistant
+twinaatma setup-host --help        # hosts: claude-code, codex, cursor, vscode, claude-desktop, windsurf
 twinaatma version                  # also --version
 ```
 
