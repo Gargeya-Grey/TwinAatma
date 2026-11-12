@@ -7,6 +7,7 @@ import subprocess
 import sys
 import unittest
 import uuid
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,13 +28,13 @@ SELF = (
 
 class StartupContextBudgetTests(unittest.TestCase):
     def setUp(self):
-        self.directory = EVIDENCE / self._testMethodName / uuid.uuid4().hex
+        self.directory = EVIDENCE / self._testMethodName[:24] / uuid.uuid4().hex[:16]
         self.vault = self.directory / "vault"
         (self.vault / "People").mkdir(parents=True)
         (self.vault / "Research").mkdir()
         (self.vault / "People/Self.md").write_bytes(SELF.encode("utf-8"))
 
-    def tool(self, name, arguments):
+    def tool(self, name, arguments, *, expect_error=False):
         messages = [
             {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
                 "protocolVersion": "2024-11-05", "capabilities": {},
@@ -42,7 +43,10 @@ class StartupContextBudgetTests(unittest.TestCase):
             {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
                 "name": name, "arguments": arguments}},
         ]
-        command = [sys.executable, "-B", "-P", "-m", "knowledgeos", "mcp",
+        command = [sys.executable, "-B", "-X", "utf8"]
+        if sys.version_info >= (3, 11):
+            command.append("-P")
+        command += ["-m", "knowledgeos", "mcp",
                    "--vault", str(self.vault), "--framing", "ndjson"]
         env = dict(os.environ, PYTHONPATH=str(ROOT),
                    KNOWLEDGEOS_STATE_DIR=str(self.directory / "gate-state"))
@@ -66,9 +70,164 @@ class StartupContextBudgetTests(unittest.TestCase):
         responses = {row["id"]: row for row in map(json.loads, stdout.splitlines())}
         self.assertEqual(responses[1]["result"]["serverInfo"]["name"], "knowledgeos-memory")
         result = responses[2]["result"]
-        self.assertFalse(result.get("isError"), result)
+        self.assertEqual(bool(result.get("isError")), expect_error, result)
         text = result["content"][0]["text"]
         return text, json.loads(text)
+
+    def test_long_prior_hint_is_an_explicit_preview_without_changing_session_state(self):
+        hint = "Synthetic envelope boundary marker. " + "x" * 17000
+        self.tool("memory_session_start", {
+            "session_id": "envelope-long", "task_hint": hint,
+        })
+        text, payload = self.tool("memory_session_start", {
+            "session_id": "envelope-short", "task_hint": "Short synthetic hint.",
+        })
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        self.assertEqual(payload["session_id"], "envelope-short")
+        self.assertEqual(payload["context"]["self"]["sections"]["heuristics"], "Unknown.")
+        row, = payload["unfinished_sessions"]
+        self.assertEqual(row["session_id"], "envelope-long")
+        self.assertEqual(row["status"], "open")
+        self.assertTrue(row["task_hint_truncated"])
+        self.assertTrue(hint.startswith(row["task_hint"]))
+        self.assertLess(len(row["task_hint"]), len(hint))
+        notice = payload["unfinished_sessions_preview"]
+        self.assertEqual(notice["total_count"], 1)
+        self.assertEqual(notice["omitted_count"], 0)
+        self.assertEqual(notice["truncated_hint_count"], 1)
+        self.assertIn("persisted", notice["notice"])
+        state = json.loads((self.vault / ".knowledgeos/autopilot.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["sessions"]["envelope-long"]["task_hint"], hint)
+        self.assertEqual(state["sessions"]["envelope-long"]["status"], "open")
+        self.assertEqual(state["real_sessions"], 2)
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
+
+    def test_escaped_multibyte_hint_preview_uses_whole_utf8_wire_budget(self):
+        hint = '甲🙂"\\\n' * 2200
+        self.tool("memory_session_start", {"session_id": "unicode-prior", "task_hint": hint})
+        text, payload = self.tool("memory_session_start", {"session_id": "unicode-next"})
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        row, = payload["unfinished_sessions"]
+        self.assertEqual(row["session_id"], "unicode-prior")
+        self.assertTrue(row["task_hint_truncated"])
+        self.assertTrue(hint.startswith(row["task_hint"]))
+        self.assertNotIn("\ufffd", row["task_hint"])
+        self.assertEqual(row["task_hint_total_bytes"], len(hint.encode("utf-8")))
+        self.assertEqual(payload["unfinished_sessions_preview"]["truncated_hint_count"], 1)
+        self.assertEqual(payload["context"]["self"]["sections"]["heuristics"], "Unknown.")
+        state = json.loads((self.vault / ".knowledgeos/autopilot.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["sessions"]["unicode-prior"]["task_hint"], hint)
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
+
+    def test_many_unfinished_sessions_preserve_order_and_disclose_exact_omissions(self):
+        self.tool("memory_session_start", {"session_id": "seed"})
+        path = self.vault / ".knowledgeos/autopilot.json"
+        state = json.loads(path.read_text(encoding="utf-8"))
+        records = {f"prior-{number:02}-" + "x" * 110: {
+            "status": "open", "started_at": 1, "task_hint": f"Synthetic task {number}.",
+        } for number in range(90)}
+        state["sessions"] = records
+        state["real_sessions"] = 90
+        path.write_text(json.dumps(state), encoding="utf-8")
+        text, payload = self.tool("memory_session_start", {"session_id": "many-next"})
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        rows = payload["unfinished_sessions"]
+        self.assertGreater(len(rows), 0)
+        self.assertLess(len(rows), 90)
+        self.assertEqual([row["session_id"] for row in rows], list(records)[:len(rows)])
+        self.assertEqual(payload["unfinished_sessions_preview"]["total_count"], 90)
+        self.assertEqual(payload["unfinished_sessions_preview"]["omitted_count"], 90 - len(rows))
+        self.assertEqual(payload["unfinished_sessions_preview"]["truncated_hint_count"], 0)
+        self.assertIn("omitted", payload["unfinished_sessions_preview"]["notice"])
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in records.items():
+            self.assertEqual(persisted["sessions"][key], value)
+        self.assertEqual(persisted["real_sessions"], 91)
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
+
+    def test_history_preview_packing_scales_linearly(self):
+        from knowledgeos import memory
+
+        self.tool("memory_session_start", {"session_id": "seed"})
+        path = self.vault / ".knowledgeos/autopilot.json"
+        state = json.loads(path.read_text(encoding="utf-8"))
+        records = {f"prior-{number:04}": {
+            "status": "open", "started_at": 1, "task_hint": "Synthetic unfinished task " + "x" * 100,
+        } for number in range(1000)}
+        state["sessions"] = records
+        state["real_sessions"] = 1000
+        path.write_text(json.dumps(state), encoding="utf-8")
+        original = memory._context_bytes
+        serialized_history_rows = 0
+
+        def counted(value):
+            nonlocal serialized_history_rows
+            if isinstance(value, dict) and isinstance(value.get("unfinished_sessions"), list):
+                serialized_history_rows += len(value["unfinished_sessions"])
+            return original(value)
+
+        with mock.patch.dict(os.environ, {"KNOWLEDGEOS_STATE_DIR": str(self.directory / "gate-state")}), \
+                mock.patch.object(memory, "_context_bytes", side_effect=counted):
+            result = memory.dispatch(memory.MemoryAPI(self.vault), "memory_session_start", {
+                "session_id": "linear-next", "task_hint": "Short synthetic task.",
+            })
+        (self.directory / "packing-count.json").write_text(json.dumps({
+            "history_rows": 1000, "serialized_history_rows": serialized_history_rows,
+            "response_utf8_bytes": original(result), "source_api": "memory_session_start",
+        }), encoding="utf-8")
+        self.assertNotIn("error", result)
+        self.assertLessEqual(original(result), 16384)
+        shown = result["unfinished_sessions"]
+        self.assertEqual([row["session_id"] for row in shown], list(records)[:len(shown)])
+        self.assertGreater(len(shown), 0)
+        self.assertEqual(result["unfinished_sessions_preview"]["omitted_count"], 1000 - len(shown))
+        persisted = json.loads(path.read_text(encoding="utf-8"))
+        for key, value in records.items():
+            self.assertEqual(persisted["sessions"][key], value)
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
+        self.assertLessEqual(serialized_history_rows, 3 * len(records))
+
+    def test_error_envelope_is_bounded_and_preserves_correlation_and_replay(self):
+        self.tool("memory_session_start", {"session_id": "normal-prior", "task_hint": "Prior hint."})
+        own_id = "n" * 128
+        text, payload = self.tool("memory_session_start", {
+            "session_id": own_id, "task_hint": "Durable hint.", "source": "x" * 17000,
+        }, expect_error=True)
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        self.assertEqual(payload["session_id"], own_id)
+        self.assertIn("Retrieve the full identity", payload["error"])
+        self.assertEqual(payload["unfinished_sessions"], [])
+        self.assertEqual(payload["unfinished_sessions_preview"]["total_count"], 1)
+        self.assertEqual(payload["unfinished_sessions_preview"]["omitted_count"], 1)
+        _, replay = self.tool("memory_session_start", {"session_id": own_id, "task_hint": "Retry hint."})
+        self.assertEqual(replay["session_id"], own_id)
+        self.assertEqual(replay["unfinished_sessions"], [{
+            "session_id": "normal-prior", "status": "open", "task_hint": "Prior hint.",
+        }])
+        self.assertNotIn("unfinished_sessions_preview", replay)
+        arguments = {"session_id": own_id, "summary": "Synthetic result retained."}
+        _, first = self.tool("memory_session_end", arguments)
+        _, again = self.tool("memory_session_end", arguments)
+        self.assertEqual(first["captured"]["path"], again["captured"]["path"])
+        state = json.loads((self.vault / ".knowledgeos/autopilot.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["real_sessions"], 2)
+        self.assertEqual(state["sessions_completed"], 1)
+        self.assertEqual(state["sessions"][own_id]["task_hint"], "Durable hint.")
+        self.assertEqual(state["sessions"][own_id]["status"], "ended")
+        self.assertEqual(state["sessions"]["normal-prior"]["status"], "open")
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
+
+    def test_oversized_prewarm_session_id_refuses_before_state_mutation(self):
+        self.tool("memory_session_start", {"session_id": "prior"})
+        path = self.vault / ".knowledgeos/autopilot.json"
+        before = path.read_bytes()
+        text, payload = self.tool("memory_session_start", {
+            "session_id": "x" * 17000, "source": "prewarm",
+        }, expect_error=True)
+        self.assertLessEqual(len(text.encode("utf-8")), 16384)
+        self.assertIn("1-128", payload["error"])
+        self.assertEqual(path.read_bytes(), before)
+        self.assertEqual((self.vault / "People/Self.md").read_bytes(), SELF.encode("utf-8"))
 
     def test_startup_fits_16_kib_without_dropping_ranked_evidence(self):
         sources = {}

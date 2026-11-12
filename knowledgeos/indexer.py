@@ -21,7 +21,7 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator, NamedTuple
 
 from knowledgeos.data_ops import personal_note_paths
 from knowledgeos.database import checked_database_path, connect_database
@@ -64,7 +64,7 @@ MAX_HASH_BYTES = 8 * 1024 * 1024
 LOCK_PROBE_SECONDS = 1.5
 # Streaming read size for `_file_signature`. Notes are hashed in full; this only bounds
 # peak memory for a pathologically large file.
-HASH_CHUNK_BYTES = 1024 * 1024
+HASH_CHUNK_BYTES = 64 * 1024
 
 # `AGENTS.md` is the operating contract the host agent reads directly. It is not a note
 # and it is not written by the user, so it is never indexed in any vault. It is still
@@ -193,13 +193,15 @@ def _contained(root: str, candidate: str) -> bool:
         return False
 
 
-def _is_link(path: Path) -> bool:
+def _is_link(path: Path, *, complete=False) -> bool:
     """Symlink, junction or other reparse point (Windows junctions are not symlinks)."""
     try:
         if path.is_symlink():
             return True
         real = os.lstat(path)
     except OSError:
+        if complete:
+            raise
         return True
     attributes = getattr(real, "st_file_attributes", 0)
     return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
@@ -207,24 +209,52 @@ def _is_link(path: Path) -> bool:
 
 def iter_markdown(vault: Path) -> list[Path]:
     """All indexable markdown files, confined to the real vault directory."""
+    return _markdown_inventory(vault)
+
+
+def _complete_walk(root: str, skip_directory: Callable[[Path, str], bool]) -> Iterator[tuple[str, list[str], list[str]]]:
+    """Enumerate top down without suppressing directory-entry observation errors."""
+    pending = [root]
+    while pending:
+        current = pending.pop()
+        current_path = Path(current)
+        directories: list[str] = []
+        files: list[str] = []
+        with os.scandir(current) as entries:
+            for entry in entries:
+                # These names are excluded as directories and cannot be Markdown files.
+                if not entry.name.lower().endswith(".md") and skip_directory(current_path, entry.name):
+                    continue
+                target = directories if entry.is_dir(follow_symlinks=False) else files
+                target.append(entry.name)
+        yield current, directories, files
+        # The caller prunes this list. Recheck links after it yields control.
+        for name in reversed(directories):
+            child = os.path.join(current, name)
+            if not _is_link(Path(child), complete=True):
+                pending.append(child)
+
+
+def _markdown_inventory(vault: Path, *, complete=False) -> list[Path]:
     vault = vault.resolve()
     root = str(vault)
     out: list[Path] = []
     toolkit_repo = _is_toolkit_repo(vault)
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+
+    def skipped_directory(current: Path, name: str) -> bool:
+        # Root templates are authoring instructions; nested Templates can hold notes.
+        return (name in SKIP_DIRS or current == vault and name == "Templates"
+                or toolkit_repo and current == vault and name in TOOLKIT_ONLY_DIRS)
+
+    walk = _complete_walk(root, skipped_directory) if complete else os.walk(root, followlinks=False)
+    for dirpath, dirnames, filenames in walk:
         current = Path(dirpath)
         kept: list[str] = []
         for name in dirnames:
-            if name in SKIP_DIRS:
-                continue
-            # Root templates are instructions for authoring notes. A user's
-            # nested project folder named Templates still contains normal notes.
-            if current == vault and name == "Templates":
-                continue
-            if toolkit_repo and current == vault and name in TOOLKIT_ONLY_DIRS:
+            if skipped_directory(current, name):
                 continue
             child = current / name
-            if _is_link(child):
+            if _is_link(child, complete=complete):
                 continue
             kept.append(name)
         dirnames[:] = kept
@@ -243,13 +273,15 @@ def iter_markdown(vault: Path) -> list[Path]:
             if _is_conflict_copy(current / name):
                 continue
             path = current / name
-            if _is_link(path):
+            if _is_link(path, complete=complete):
                 continue
             try:
                 if not stat.S_ISREG(path.lstat().st_mode):
                     continue
                 resolved = path.resolve()
             except OSError:
+                if complete:
+                    raise
                 continue
             if not _contained(root, str(resolved)):
                 # A link inside the vault pointing outside: never index it.
@@ -259,11 +291,18 @@ def iter_markdown(vault: Path) -> list[Path]:
 
 
 def iter_memory_markdown(vault: Path) -> list[Path]:
-    """Memory admission is narrower than the source inventory used by maintenance."""
-    from knowledgeos.remembering import RememberingPolicy
+    """Memory admission requires a complete observation of the source inventory."""
+    from knowledgeos.remembering import RememberingPolicy, _AdmittedSource, _UnavailableSource
 
     policy = RememberingPolicy(vault)
-    return [path for path in iter_markdown(vault) if policy.read(path) is not None]
+    admitted: list[Path] = []
+    for path in _markdown_inventory(vault, complete=True):
+        observed = policy._observe_source(path)
+        if isinstance(observed, _UnavailableSource):
+            raise OSError("A memory source could not be completely observed")
+        if isinstance(observed, _AdmittedSource):
+            admitted.append(path)
+    return admitted
 
 
 def manifest_path(vault: Path) -> Path:
@@ -364,7 +403,12 @@ def _manifest_mac(payload: dict[str, Any]) -> str | None:
     return hmac.new(key, canonical, hashlib.sha256).hexdigest()
 
 
-def index_digest(conn: sqlite3.Connection) -> str | None:
+class _IndexInspection(NamedTuple):
+    digest: str
+    source_paths: frozenset[str]
+
+
+def _inspect_index(conn: sqlite3.Connection) -> _IndexInspection | None:
     """A digest over every value the index holds.
 
     Signing only the *file* signatures left the database inside the vault unwatched, and
@@ -381,6 +425,7 @@ def index_digest(conn: sqlite3.Connection) -> str | None:
     import hashlib
 
     digest = hashlib.sha256()
+    source_paths = set()
 
     def feed(values: Any) -> None:
         for value in values:
@@ -412,23 +457,33 @@ def index_digest(conn: sqlite3.Connection) -> str | None:
         if not columns:
             return None
         feed(("notes", *columns))
+        path_index = columns.index("path")
         quoted = ["\"" + name.replace("\"", "\"\"") + "\"" for name in columns]
         for row in conn.execute("SELECT " + ", ".join(quoted) + " FROM notes ORDER BY path"):
             feed(row)
+            if isinstance(row[path_index], str):
+                source_paths.add(row[path_index])
         feed(("notes_fts", "path", "title", "body", "tags", "description"))
         for row in conn.execute(
             "SELECT path, title, body, tags, description FROM notes_fts ORDER BY path"
         ):
             feed(row)
+            if isinstance(row[0], str):
+                source_paths.add(row[0])
         feed(("links", "source", "destination", "raw_destination"))
         for row in conn.execute(
             "SELECT source, destination, raw_destination FROM links "
             "ORDER BY source, destination, IFNULL(raw_destination, '')"
         ):
             feed(row)
-    except sqlite3.Error:
+    except (sqlite3.Error, ValueError, TypeError, IndexError):
         return None
-    return digest.hexdigest()
+    return _IndexInspection(digest.hexdigest(), frozenset(source_paths))
+
+
+def index_digest(conn: sqlite3.Connection) -> str | None:
+    inspection = _inspect_index(conn)
+    return inspection.digest if inspection is not None else None
 
 
 def load_manifest(vault: Path) -> dict[str, Any] | None:
@@ -543,18 +598,21 @@ def manifest_diff(
     if not expected_index:
         return True, "index_digest_missing"
     db_path = vault / DB_NAME
-    if expected_index and index_state(db_path) == "ok":
-        actual_index = None
+    state = index_state(db_path)
+    if state != "ok":
+        return True, "index_" + state
+    try:
+        conn = connect_database(db_path, timeout=2.0)
         try:
-            conn = connect_database(db_path, timeout=2.0)
-            try:
-                actual_index = index_digest(conn)
-            finally:
-                conn.close()
-        except sqlite3.Error:
-            actual_index = None
-        if actual_index != expected_index:
-            return True, "index_tampered"
+            inspection = _inspect_index(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        inspection = None
+    if inspection is None or inspection.digest != expected_index:
+        return True, "index_tampered"
+    if not inspection.source_paths.issubset(disk_paths):
+        return True, "index_source_coverage"
 
     if hashed > hash_budget_bytes:
         return False, f"fresh_over_budget:{hashed}"
@@ -833,11 +891,16 @@ def _process_file(args: tuple[Path, Path, dict[str, str]]):
     path, vault, lookup = args
     try:
         rel = path.relative_to(vault).as_posix()
-        from knowledgeos.remembering import RememberingPolicy, PolicyError, EXCLUDED
-        text = RememberingPolicy(vault).read(path)
-        if text is None:
+        from knowledgeos.remembering import (
+            RememberingPolicy, PolicyError, EXCLUDED, _AdmittedSource, _ExcludedSource,
+        )
+        observed = RememberingPolicy(vault)._observe_source(path)
+        if isinstance(observed, _ExcludedSource):
             raise PolicyError(EXCLUDED)
-        file_hash = hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+        if not isinstance(observed, _AdmittedSource):
+            raise OSError("source unavailable or changed while reading")
+        text = observed.text
+        file_hash = observed.signature.sha256
 
         fm = parse_frontmatter(text)
         _, body_only = split_frontmatter(text)
@@ -891,7 +954,7 @@ def _process_file(args: tuple[Path, Path, dict[str, str]]):
             _as_text(fm.get("tags") or ""),
             _as_text(fm.get("description") or ""),
         )
-        return (rel, (note_data, resolved_links, fts_row))
+        return (rel, (note_data, resolved_links, fts_row, observed.signature))
     except Exception as e:
         try:
             rel = str(path.relative_to(vault).as_posix())
@@ -925,96 +988,73 @@ def index_files(vault: Path | str, paths: list[Path]) -> dict[str, Any]:
     if not db_path.exists():
         return rebuild_index(vault)
 
-    # Before touching anything, ask the signed manifest whether the index it describes
-    # is still the index on disk. If it is not, the vault's own capture path would
-    # recompute the digest over the tampered rows and sign it, turning a one-shot alarm
-    # into a permanent blessing — the reviewer did exactly that: one UPDATE, one
-    # `memory_capture`, and `manifest_diff` went from `index_tampered` to `fresh` while
-    # the forged title was still served.
-    #
-    # A capture is not the place to adjudicate trust, so the answer is to hand the whole
-    # thing to `rebuild_index`, which re-extracts every note and therefore produces a
-    # state that can honestly be signed. Done before taking the rebuild lock, because
-    # `rebuild_index` takes it too.
-    stored = load_manifest(vault)
-    expected_digest = (stored or {}).get("index")
-    if not expected_digest:
-        # No signed digest: an index written before this field existed, a rotated HMAC
-        # key, or a vault copied to a machine whose state folder is new. There is nothing
-        # to compare against, so the honest move is a full rebuild — it is the only way
-        # to produce a digest that means anything.
-        #
-        # That costs O(vault): ~1.2 s at 800 notes, ~26 s at 5,000. It happens *once*,
-        # because the rebuild writes a digest, and the next capture takes the fast path.
-        # Said out loud in the result rather than being an unexplained pause, and named
-        # so a caller can tell "the index was rebuilt" from "one file was indexed".
-        counts = rebuild_index(vault)
-        counts["rebuilt"] = "no_signed_digest"
-        return counts
-    try:
-        probe = connect_database(db_path, timeout=2.0)
-        try:
-            current_digest = index_digest(probe)
-        finally:
-            probe.close()
-    except sqlite3.Error:
-        return rebuild_index(vault)
-    if current_digest != expected_digest:
-        return rebuild_index(vault)
-
     with _rebuild_lock(vault):
-        md_files = iter_memory_markdown(vault)
-        lookup = build_note_lookup(md_files, vault)
-        indexable = set(md_files)
-        targets = [p for p in paths if p in indexable]
-        if not targets:
-            return {"notes": 0, "links": 0, "fts_updates": 0, "removed": 0, "failed": []}
-        conn = connect_database(db_path, timeout=30.0)
-        conn.execute("PRAGMA busy_timeout=15000")
+        stored = load_manifest(vault)
+        expected_digest = (stored or {}).get("index")
+        conn = None
         try:
-            cur = conn.cursor()
-            counts = _upsert_files(cur, vault, targets, lookup)
-            # The fast path used to report `removed: 0` unconditionally and merge only the
-            # target signatures into the saved manifest. A note deleted in the same second
-            # as a capture therefore survived in the index *and* in the manifest, so the
-            # next `manifest_diff` called the vault fresh and the dead row was served
-            # indefinitely. Reconcile against the disk like a rebuild does.
-            current_paths = {p.relative_to(vault).as_posix() for p in md_files}
-            for path in _indexed_paths(cur):
-                if path not in current_paths:
-                    cur.execute("DELETE FROM notes WHERE path = ?", (path,))
-                    cur.execute("DELETE FROM links WHERE source = ?", (path,))
-                    cur.execute("DELETE FROM notes_fts WHERE path = ?", (path,))
-                    counts["removed"] += 1
-            digest = index_digest(conn) or ""
-            conn.commit()
+            current_digest = None
+            if expected_digest:
+                try:
+                    conn = connect_database(db_path, timeout=30.0)
+                    conn.execute("PRAGMA busy_timeout=15000")
+                    # Keep other SQLite writers out from verification through the
+                    # resulting digest. A late check alone leaves another write gap.
+                    conn.execute("BEGIN IMMEDIATE")
+                    current_digest = index_digest(conn)
+                except sqlite3.Error as exc:
+                    if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                        raise
+            if current_digest and current_digest == expected_digest:
+                md_files = iter_memory_markdown(vault)
+                lookup = build_note_lookup(md_files, vault)
+                indexable = set(md_files)
+                targets = [p for p in paths if p in indexable]
+                if not targets:
+                    return {"notes": 0, "links": 0, "fts_updates": 0, "removed": 0, "failed": []}
+                cur = conn.cursor()
+                counts, signatures = _upsert_files(cur, vault, targets, lookup)
+                current_paths = {p.relative_to(vault).as_posix() for p in md_files}
+                for path in _indexed_paths(cur):
+                    if path not in current_paths:
+                        cur.execute("DELETE FROM notes WHERE path = ?", (path,))
+                        cur.execute("DELETE FROM links WHERE source = ?", (path,))
+                        cur.execute("DELETE FROM notes_fts WHERE path = ?", (path,))
+                        counts["removed"] += 1
+                digest = index_digest(conn) or ""
+                conn.commit()
+                files = {
+                    rel: sig
+                    for rel, sig in (stored.get("files") or {}).items()
+                    if rel in current_paths
+                }
+                failed_paths = set(counts.get("failed") or [])
+                for path in targets:
+                    rel = path.relative_to(vault).as_posix()
+                    if rel in failed_paths:
+                        files.pop(rel, None)
+                        continue
+                    signature = signatures.get(rel)
+                    if signature is not None:
+                        files[rel] = list(signature)
+                save_manifest(
+                    vault,
+                    {
+                        "version": MANIFEST_VERSION,
+                        "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                        "files": files,
+                        "index": digest,
+                    },
+                )
+                return counts
         finally:
-            conn.close()
-        manifest = load_manifest(vault) or {"version": MANIFEST_VERSION, "files": {}}
-        files = {
-            rel: sig
-            for rel, sig in (manifest.get("files") or {}).items()
-            if rel in current_paths
-        }
-        failed_paths = set(counts.get("failed") or [])
-        for path in targets:
-            rel = path.relative_to(vault).as_posix()
-            if rel in failed_paths:
-                files.pop(rel, None)
-                continue
-            signature = _file_signature(path)
-            if signature is not None:
-                files[rel] = signature
-        save_manifest(
-            vault,
-            {
-                "version": MANIFEST_VERSION,
-                "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-                "files": files,
-                "index": digest,
-            },
-        )
-        return counts
+            if conn is not None:
+                conn.close()
+    # The rebuild takes the same lock and must start after this transaction closes.
+    counts = rebuild_index(vault)
+    if not expected_digest:
+        counts["rebuilt"] = "no_signed_digest"
+    return counts
 
 
 def _upsert_files(
@@ -1022,15 +1062,16 @@ def _upsert_files(
     vault: Path,
     targets: list[Path],
     lookup: dict[str, str],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, tuple[int, int, str]]]:
     note_count = link_count = fts_updates = 0
     failed: list[str] = []
+    signatures = {}
     for path in targets:
         rel, payload = _process_file((path, vault, lookup))
         if isinstance(payload, Exception):
             failed.append(rel)
             continue
-        note_data, resolved_links, fts_row = payload
+        note_data, resolved_links, fts_row, signature = payload
         cur.execute("DELETE FROM links WHERE source = ?", (rel,))
         cur.execute(_INSERT_NOTE_SQL, note_data)
         cur.execute("DELETE FROM notes_fts WHERE path = ?", (rel,))
@@ -1040,6 +1081,7 @@ def _upsert_files(
         )
         fts_updates += 1
         note_count += 1
+        signatures[rel] = signature
         for dest, raw in resolved_links:
             cur.execute(
                 "INSERT INTO links (source, destination, raw_destination) VALUES (?, ?, ?)",
@@ -1052,7 +1094,7 @@ def _upsert_files(
         "fts_updates": fts_updates,
         "removed": 0,
         "failed": failed,
-    }
+    }, signatures
 
 
 def rebuild_index(vault: Path | str) -> dict[str, Any]:
@@ -1073,17 +1115,21 @@ def rebuild_index(vault: Path | str) -> dict[str, Any]:
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA busy_timeout=15000")
-            counts = _write_index(conn, vault, md_files, lookup)
+            counts, signatures = _write_index(conn, vault, md_files, lookup)
         finally:
             conn.close()
         final_state = index_state(db_path)
         if final_state != "ok":
             raise OSError(f"The rebuilt note index is not usable ({final_state})")
-        failed = set(counts.get("failed", []) or [])
         digest = counts.pop("index_digest", None)
-        save_manifest(
-            vault, build_manifest(vault, md_files, skip=failed, index_digest=digest)
-        )
+        manifest = {
+            "version": MANIFEST_VERSION,
+            "built_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "files": {rel: list(signature) for rel, signature in signatures.items()},
+        }
+        if digest:
+            manifest["index"] = digest
+        save_manifest(vault, manifest)
         counts["index_state"] = final_state
         return counts
 
@@ -1093,10 +1139,13 @@ def _write_index(
     vault: Path,
     md_files: list[Path],
     lookup: dict[str, str],
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, tuple[int, int, str]]]:
     cur = conn.cursor()
     cur.executescript(_SCHEMA_SQL)
     cur.execute(_FTS_SQL)
+    # executescript commits implicitly. Own all state-derived reconciliation and
+    # the final digest only after that schema setup has finished.
+    conn.execute("BEGIN IMMEDIATE")
 
     link_cols = [r[1] for r in cur.execute("PRAGMA table_info(links)")]
     added_raw_destination = "raw_destination" not in link_cols
@@ -1141,26 +1190,67 @@ def _write_index(
     # take, which is the point: a row that claims to be unchanged is a row nobody checked.
     note_count = link_count = fts_updates = 0
     failed: list[str] = []
+    signatures = {}
     worker_args = [(p, vault, lookup) for p in md_files]
     workers = min(8, max(1, (os.cpu_count() or 2)))
     with ThreadPoolExecutor(max_workers=workers) as executor:
         results = list(executor.map(_process_file, worker_args))
 
+    fts_rowids_initialized = False
+    fts_rowids: dict[Any, list[int]] | None = None
     for rel, payload in results:
         if isinstance(payload, Exception):
             print(f"Error processing {rel}: {payload}", file=sys.stderr)
             failed.append(rel)
             continue
-        note_data, resolved_links, fts_row = payload
+        note_data, resolved_links, fts_row, signature = payload
         cur.execute("DELETE FROM links WHERE source = ?", (rel,))
         cur.execute(_INSERT_NOTE_SQL, note_data)
-        cur.execute("DELETE FROM notes_fts WHERE path = ?", (rel,))
+        if not fts_rowids_initialized:
+            fts_rowids_initialized = True
+            has_triggers = cur.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'trigger' "
+                "UNION ALL SELECT 1 FROM sqlite_temp_master WHERE type = 'trigger' LIMIT 1"
+            ).fetchone()
+            if not has_triggers:
+                fts_rowids = {}
+                for rowid, path in cur.execute("SELECT rowid, path FROM notes_fts"):
+                    fts_rowids.setdefault(path, []).append(rowid)
+                if conn.in_transaction:
+                    temp_shadow = cur.execute(
+                        "SELECT 1 FROM temp.sqlite_master "
+                        "WHERE name = ? COLLATE NOCASE LIMIT 1", ("links",)
+                    ).fetchone()
+                    main_link = cur.execute(
+                        "SELECT type, rootpage FROM main.sqlite_master "
+                        "WHERE name = ? COLLATE NOCASE", ("links",)
+                    ).fetchone()
+                    occupied_name = cur.execute(
+                        "SELECT 1 FROM main.sqlite_master "
+                        "WHERE name = ? COLLATE NOCASE LIMIT 1",
+                        ("kos_links_source_lookup_v1",)
+                    ).fetchone()
+                    if (not temp_shadow and main_link is not None
+                            and main_link[0] == "table" and main_link[1] > 0
+                            and not occupied_name):
+                        cur.execute(
+                            "CREATE INDEX main.kos_links_source_lookup_v1 "
+                            "ON links(source) WHERE source IS NOT NULL"
+                        )
+        if fts_rowids is None:
+            cur.execute("DELETE FROM notes_fts WHERE path = ?", (rel,))
+        else:
+            cur.executemany(
+                "DELETE FROM notes_fts WHERE rowid = ?",
+                ((rowid,) for rowid in fts_rowids.get(rel, ())),
+            )
         cur.execute(
             "INSERT INTO notes_fts(path, title, body, tags, description) VALUES (?, ?, ?, ?, ?)",
             fts_row,
         )
         fts_updates += 1
         note_count += 1
+        signatures[rel] = signature
         for dest, raw in resolved_links:
             cur.execute(
                 "INSERT INTO links (source, destination, raw_destination) VALUES (?, ?, ?)",
@@ -1175,10 +1265,8 @@ def _write_index(
         ("last_rebuild_removed", removed),
     ):
         cur.execute("INSERT OR REPLACE INTO metadata(key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    # Computed at the very end, from the rows themselves, so it cannot describe a state
-    # that was never written.
     index_digest_value = index_digest(conn) or ""
+    conn.commit()
     return {
         "notes": note_count,
         "links": link_count,
@@ -1186,4 +1274,4 @@ def _write_index(
         "removed": removed,
         "failed": failed,
         "index_digest": index_digest_value,
-    }
+    }, signatures

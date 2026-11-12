@@ -271,6 +271,7 @@ def breathe(api: Any, task_hint: str = "", limit: int = 8, *,
     import uuid
     if source != "prewarm":
         session_id = session_id or uuid.uuid4().hex
+    if session_id is not None:
         validate_session_id(session_id)
     with state_lock(api.vault):
         return _breathe(api, task_hint, limit, source=source, session_id=session_id)
@@ -398,10 +399,61 @@ def _breathe(
     # straight back to the agent that asked for it.
     from knowledgeos.memory import STARTUP_CONTEXT_BYTES, _context_bytes
 
+    if ctx.get("error"):
+        payload["error"] = ctx["error"]
+    if _context_bytes(payload) <= STARTUP_CONTEXT_BYTES:
+        return payload
+
+    # These rows are response previews, separate from the full persisted records.
+    unfinished = payload["unfinished_sessions"]
+    total = len(unfinished)
+    if unfinished:
+        preview = {
+            "total_count": total,
+            "omitted_count": total,
+            "truncated_hint_count": 0,
+            "notice": "Partial startup preview. Complete hints and omitted session records remain persisted; omitted sessions are not absent.",
+        }
+        selected = []
+        row_bytes = 0
+        for row in unfinished:
+            hint_bytes = row["task_hint"].encode("utf-8")
+            if len(hint_bytes) > 256:
+                row["task_hint"] = hint_bytes[:256].decode("utf-8", errors="ignore")
+                row["task_hint_truncated"] = True
+                row["task_hint_total_bytes"] = len(hint_bytes)
+            count = len(selected) + 1
+            next_preview = dict(preview, omitted_count=total - count,
+                                truncated_hint_count=preview["truncated_hint_count"]
+                                + bool(row.get("task_hint_truncated")))
+            next_row_bytes = row_bytes + _context_bytes(row)
+            envelope_bytes = _context_bytes({
+                "unfinished_sessions": [], "unfinished_sessions_preview": next_preview,
+            })
+            # Replace the empty JSON array with encoded rows and their commas.
+            if envelope_bytes + next_row_bytes + count - 1 > 2048:
+                break
+            selected.append(row)
+            row_bytes, preview = next_row_bytes, next_preview
+        payload["unfinished_sessions"] = selected
+        payload["unfinished_sessions_preview"] = preview
+        if not preview["omitted_count"] and not preview["truncated_hint_count"]:
+            payload.pop("unfinished_sessions_preview")
+
     allowance = STARTUP_CONTEXT_BYTES - _context_bytes(dict(payload, context={}))
     payload["context"] = api._bound_startup_context(ctx, max_bytes=allowance)
     if payload["context"].get("error"):
         payload["error"] = payload["context"]["error"]
+    if _context_bytes(payload) > STARTUP_CONTEXT_BYTES:
+        return {
+            "ritual": "breathe", "session_id": session_id,
+            "error": "The startup response cannot fit the context budget. Retrieve the full identity and relevant notes before advising. Session records remain persisted.",
+            "unfinished_sessions": [],
+            "unfinished_sessions_preview": {
+                "total_count": total, "omitted_count": total, "truncated_hint_count": 0,
+                "notice": "All unfinished-session previews and other startup details were omitted. Full session records remain persisted; omitted previews do not establish an empty history.",
+            },
+        }
     return payload
 
 

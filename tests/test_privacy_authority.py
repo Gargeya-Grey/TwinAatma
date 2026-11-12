@@ -184,14 +184,14 @@ class PrivacyAuthorityTests(unittest.TestCase):
         self.assertTrue(self.forget().get("ok"))
         authority = self.authority()
         retained = self.retain(authority, "hardlink-authority.original")
-        authority.hardlink_to(retained)
+        os.link(retained, authority)
         self.assert_closed(self.api.get_note("Projects/old.md"))
         self.assertEqual(retained.read_bytes(), authority.read_bytes())
         self.retain(authority, "hardlink-authority.link")
         authority.write_bytes(retained.read_bytes())
         key = self.root / "state/gate.key"
         retained_key = self.retain(key, "hardlink-key.original")
-        key.hardlink_to(retained_key)
+        os.link(retained_key, key)
         self.assert_closed(self.api.get_note("Projects/old.md"))
         self.assertEqual(retained_key.read_bytes(), key.read_bytes())
 

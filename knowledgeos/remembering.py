@@ -9,6 +9,7 @@ copies, but cannot recognize arbitrary paraphrases.
 from __future__ import annotations
 
 import contextlib
+import builtins
 import datetime
 import functools
 import hashlib
@@ -19,8 +20,14 @@ import os
 import re
 import secrets
 import stat
+import sys
+import threading
+import types
 import unicodedata
+from collections import OrderedDict
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple, Union
 
 from knowledgeos.data_ops import plain_vault_path
 from knowledgeos.locking import file_lock
@@ -74,7 +81,9 @@ _SENSITIVE_DETAIL = re.compile(
 
 def _sensitive_third_party(text):
     normalized = unicodedata.normalize("NFKC", text)
-    normalized = "".join(char for char in normalized if unicodedata.category(char) != "Cf")
+    ignored = {ord(char): None for char in set(normalized) if unicodedata.category(char) == "Cf"}
+    if ignored:
+        normalized = normalized.translate(ignored)
     # Keep sentence/paragraph boundaries. A sensitive topic in another unrelated
     # paragraph must not make a normal collaboration statement private.
     for paragraph in re.split(r"(?<=[.!?])\s+|\n\s*\n", normalized):
@@ -84,12 +93,328 @@ def _sensitive_third_party(text):
     return False
 
 
+def _uncached_pattern_reason(text):
+    if _CREDENTIALS.search(text):
+        return "credential_pattern"
+    if _THIRD_PARTY.search(text) or _sensitive_third_party(text):
+        return "third_party_pattern"
+    return None
+
+
+_PATTERN_MISS = object()
+_SENTENCE_PATTERN = r"(?<=[.!?])\s+|\n\s*\n"
+
+
+def _function_builtins(function):
+    namespace = getattr(function, "__builtins__", function.__globals__.get("__builtins__"))
+    return vars(namespace) if type(namespace) is types.ModuleType else namespace
+
+
+def _function_snapshot(function):
+    return (function, function.__code__, function.__defaults__,
+            tuple((function.__kwdefaults__ or {}).items()), function.__globals__,
+            _function_builtins(function))
+
+
+def _function_unchanged(function, snapshot):
+    original, code, defaults, keywords, namespace, builtin_namespace = snapshot
+    if (function is not original or function.__code__ is not code
+            or function.__defaults__ is not defaults or function.__closure__ is not None
+            or function.__globals__ is not namespace
+            or _function_builtins(function) is not builtin_namespace):
+        return False
+    current = function.__kwdefaults__
+    return ((current is None and not keywords) or
+            (type(current) is dict and len(current) == len(keywords)
+             and all(current.get(key) is value for key, value in keywords)))
+
+
+def _fixed_pattern_bytes(roots, shared):
+    seen = set(map(id, shared))
+
+    def size(value):
+        if id(value) in seen:
+            return 0
+        seen.add(id(value))
+        total = sys.getsizeof(value)
+        if type(value) in (tuple, list):
+            total += sum(size(item) for item in value)
+        elif type(value) is dict:
+            total += sum(size(key) + size(item) for key, item in value.items())
+        elif type(value) is types.SimpleNamespace:
+            total += size(vars(value))
+        elif type(value) is types.FunctionType:
+            total += sum(size(item) for item in (value.__code__, value.__defaults__,
+                         value.__kwdefaults__, value.__globals__, value.__closure__))
+        elif type(value) is types.CodeType:
+            total += sum(size(item) for item in (value.co_code, value.co_consts,
+                         value.co_names, value.co_varnames, value.co_freevars,
+                         value.co_cellvars, value.co_filename, value.co_name))
+        elif type(value) is types.CellType:
+            total += size(value.cell_contents)
+        elif type(value) is types.BuiltinMethodType:
+            total += size(value.__self__)
+        return total
+
+    return size(roots)
+
+
+class _PatternResults:
+    __slots__ = ("entries", "lock", "eligible", "evaluate", "fixed_bytes",
+                 "key_bytes", "enabled", "sizeof", "hasher")
+    capacity = 65536
+    budget = 16 * 1024 * 1024
+
+    def __init__(self, eligible, evaluate, fixed_bytes):
+        self.entries = OrderedDict()
+        self.lock = threading.Lock()
+        self.eligible = eligible
+        self.evaluate = evaluate
+        self.fixed_bytes = fixed_bytes
+        self.key_bytes = sys.getsizeof(bytes(32))
+        self.sizeof = sys.getsizeof
+        self.hasher = hashlib.sha256
+        self.enabled = True
+
+    def retained_bound(self):
+        return self.sizeof(self.entries) + len(self.entries) * self.key_bytes + self.fixed_bytes
+
+    def lookup(self, digest):
+        with self.lock:
+            if not self.enabled:
+                return _PATTERN_MISS
+            result = self.entries.get(digest, _PATTERN_MISS)
+            if result is not _PATTERN_MISS:
+                self.entries.move_to_end(digest)
+            return result
+
+    def publish(self, digest, result):
+        with self.lock:
+            if not self.enabled:
+                return
+            try:
+                if digest in self.entries:
+                    self.entries.move_to_end(digest)
+                else:
+                    if len(self.entries) == self.capacity:
+                        self.entries.popitem(last=False)
+                    self.entries[digest] = result
+                # OrderedDict's actual size includes its dictionary high-water allocation.
+                if self.retained_bound() > self.budget:
+                    self.entries.clear()
+                    self.enabled = False
+            except (MemoryError, OverflowError):
+                self.entries.clear()
+                self.enabled = False
+                raise
+
+
+def _make_pattern_results():
+    if sys.implementation.name != "cpython":
+        return None
+    fingerprints = {
+        (3, 9): ("3ee0bb58a1a65d49c5e778e295c62fb02fa3e97dfb49e591bceebefff12caceb",
+                 "3bd8063ae7cd90aaf6e2a64043d61a6f8b40fc5e035ca93c67e213c5dd58e4b2", "_cache"),
+        (3, 13): ("6e60a0cda23f660746d96a7703a7085d70a567ccf9b21370b7164d7454fb2496",
+                  "1c0b8142dfcfb28f5eb9d395e6988eee845077e0edd369e440ce18cc2e159258", "_cache2"),
+    }
+    expected = fingerprints.get(sys.version_info[:2])
+    if expected is None:
+        return None
+    split, compiler = getattr(re, "split", None), getattr(re, "_compile", None)
+    for function, fingerprint in zip((split, compiler), expected[:2]):
+        if type(function) is not types.FunctionType or function.__closure__ is not None:
+            return None
+        code = function.__code__
+        shape = (code.co_code, code.co_names, code.co_consts, code.co_argcount,
+                 code.co_kwonlyargcount, code.co_flags)
+        if hashlib.sha256(repr(shape).encode()).hexdigest() != fingerprint:
+            return None
+    if (split.__globals__ is not vars(re) or compiler.__globals__ is not vars(re)
+            or _function_builtins(split) is not vars(builtins)
+            or _function_builtins(compiler) is not vars(builtins)):
+        return None
+    if expected[2] == "_cache2":
+        defaults = split.__kwdefaults__
+        if (split.__defaults__ is not None or type(defaults) is not dict
+                or set(defaults) != {"maxsplit", "flags"}
+                or any(value is not re._zero_sentinel for value in defaults.values())):
+            return None
+        zero_type = type(re._zero_sentinel)
+        if zero_type.__bases__ != (int,) or int(re._zero_sentinel) != 0:
+            return None
+        zero_attributes = tuple(vars(zero_type).items())
+        zero_mro = zero_type.__mro__
+    else:
+        if split.__defaults__ != (0, 0) or split.__kwdefaults__ is not None:
+            return None
+        zero_type, zero_attributes, zero_mro = None, (), None
+    regex_flag = re.RegexFlag
+    flag_meta = type(regex_flag)
+    instancecheck = flag_meta.__instancecheck__
+    if instancecheck is not type.__instancecheck__:
+        return None
+    splitter = compiler(_SENTENCE_PATTERN, 0)
+    pattern_type = type(_CREDENTIALS)
+    patterns = (_CREDENTIALS, _THIRD_PARTY, _SENSITIVE_DETAIL, _RELATED_PERSON, _NAMED_PERSON)
+    if (type(splitter) is not pattern_type or splitter.pattern != _SENTENCE_PATTERN
+            or splitter.flags != 32 or any(type(pattern) is not pattern_type for pattern in patterns)):
+        return None
+    unicode_module, regex_module = unicodedata, re
+    normalize, category = unicodedata.normalize, unicodedata.category
+    if (type(normalize) is not types.BuiltinFunctionType
+            or type(category) is not types.BuiltinFunctionType
+            or type(hashlib.sha256) is not types.BuiltinFunctionType):
+        return None
+    for function in (_uncached_pattern_reason, _sensitive_third_party):
+        if (type(function) is not types.FunctionType or function.__closure__ is not None
+                or function.__defaults__ is not None or function.__kwdefaults__ is not None):
+            return None
+    if not set(_uncached_pattern_reason.__code__.co_names) <= {
+            "_CREDENTIALS", "search", "_THIRD_PARTY", "_sensitive_third_party"}:
+        return None
+    pure_snapshot = _function_snapshot(_uncached_pattern_reason)
+    sensitive_snapshot = _function_snapshot(_sensitive_third_party)
+    split_snapshot, compiler_snapshot = _function_snapshot(split), _function_snapshot(compiler)
+    allowed = {"unicodedata", "normalize", "join", "re", "split", "search",
+               "_SENSITIVE_DETAIL", "_RELATED_PERSON", "_NAMED_PERSON", "category"}
+    allowed |= {"set", "ord", "translate"}
+    code_stack = [_sensitive_third_party.__code__]
+    while code_stack:
+        code = code_stack.pop()
+        if code.co_freevars or not set(code.co_names) <= allowed:
+            return None
+        code_stack.extend(item for item in code.co_consts if type(item) is types.CodeType)
+    frozen_globals = {
+        "__builtins__": {"set": set, "ord": ord},
+        "unicodedata": types.SimpleNamespace(normalize=normalize, category=category),
+        "re": types.SimpleNamespace(split=lambda pattern, value, operation=splitter.split: operation(value)),
+        "_SENSITIVE_DETAIL": _SENSITIVE_DETAIL, "_RELATED_PERSON": _RELATED_PERSON,
+        "_NAMED_PERSON": _NAMED_PERSON,
+    }
+    canonical_sensitive = types.FunctionType(_sensitive_third_party.__code__, frozen_globals)
+    canonical_globals = {"__builtins__": {}, "_CREDENTIALS": _CREDENTIALS,
+                         "_THIRD_PARTY": _THIRD_PARTY, "_sensitive_third_party": canonical_sensitive}
+    canonical = types.FunctionType(_uncached_pattern_reason.__code__, canonical_globals)
+    effective_cache_name = expected[2]
+    cache_key = (str, _SENTENCE_PATTERN, 0)
+    core_isinstance, core_type = builtins.isinstance, builtins.type
+    core_set, core_ord = set, ord
+
+    def eligible():
+        if (globals().get("re") is not regex_module or globals().get("unicodedata") is not unicode_module
+                or not _function_unchanged(globals().get("_uncached_pattern_reason"), pure_snapshot)
+                or not _function_unchanged(globals().get("_sensitive_third_party"), sensitive_snapshot)
+                or not _function_unchanged(getattr(regex_module, "split", None), split_snapshot)
+                or not _function_unchanged(getattr(regex_module, "_compile", None), compiler_snapshot)
+                or getattr(unicode_module, "normalize", None) is not normalize
+                or getattr(unicode_module, "category", None) is not category
+                or (globals().get("_CREDENTIALS") is not patterns[0]
+                    or globals().get("_THIRD_PARTY") is not patterns[1]
+                    or globals().get("_SENSITIVE_DETAIL") is not patterns[2]
+                    or globals().get("_RELATED_PERSON") is not patterns[3]
+                    or globals().get("_NAMED_PERSON") is not patterns[4])
+                or getattr(regex_module, "RegexFlag", None) is not regex_flag
+                or flag_meta.__instancecheck__ is not instancecheck):
+            return False
+        if (pure_snapshot[4].get("set", pure_snapshot[5].get("set")) is not core_set
+                or pure_snapshot[4].get("ord", pure_snapshot[5].get("ord")) is not core_ord):
+            return False
+        namespace = compiler_snapshot[4]
+        if (namespace.get("isinstance", compiler_snapshot[5].get("isinstance")) is not core_isinstance
+                or namespace.get("type", compiler_snapshot[5].get("type")) is not core_type):
+            return False
+        if zero_type is not None:
+            attributes = vars(zero_type)
+            if (zero_type.__mro__ is not zero_mro or len(attributes) != len(zero_attributes)
+                    or any(attributes.get(key) is not value for key, value in zero_attributes)):
+                return False
+        provider_cache = getattr(regex_module, effective_cache_name, None)
+        return type(provider_cache) is dict and provider_cache.get(cache_key) is splitter
+
+    if not eligible():
+        return None
+    fixed_roots = (canonical, eligible, pure_snapshot, sensitive_snapshot, split_snapshot,
+                   compiler_snapshot, patterns, zero_attributes, _PatternResults.__dict__)
+    measured_fixed = _fixed_pattern_bytes(fixed_roots, (globals(), vars(re), vars(builtins)))
+    fixed_reserve = 1024 * 1024
+    if (measured_fixed + sys.getsizeof(threading.Lock()) + sys.getsizeof(_PatternResults)
+            > fixed_reserve or sys.getsizeof(bytes(32)) < 32):
+        return None
+    return _PatternResults(eligible, canonical, fixed_reserve)
+
+
+try:
+    _PATTERN_RESULTS = _make_pattern_results()
+except (MemoryError, OverflowError):
+    _PATTERN_RESULTS = None
+
+
+def _pattern_reason(text):
+    cache = _PATTERN_RESULTS
+    try:
+        eligible = cache is not None and cache.enabled and cache.eligible()
+    except (MemoryError, OverflowError):
+        eligible = False
+    if not eligible:
+        return _uncached_pattern_reason(text)
+    try:
+        digest = cache.hasher(b"twinaatma-pure-pattern-v1\0")
+        for offset in range(0, len(text), 16384):
+            digest.update(text[offset:offset + 16384].encode("utf-8", "surrogatepass"))
+        key = digest.digest()
+        result = cache.lookup(key)
+    except (MemoryError, OverflowError):
+        return _uncached_pattern_reason(text)
+    if result is not _PATTERN_MISS:
+        try:
+            eligible = cache.eligible()
+        except (MemoryError, OverflowError):
+            eligible = False
+        return result if eligible else _uncached_pattern_reason(text)
+    # Classification exceptions propagate. Only bookkeeping may bypass reuse.
+    result = cache.evaluate(text)
+    try:
+        if cache.eligible():
+            cache.publish(key, result)
+            if cache.eligible():
+                return result
+    except (MemoryError, OverflowError):
+        pass
+    return _uncached_pattern_reason(text)
+
+
 _EXCLUDED_LABELS = {"exclude", "excluded", "private", "secret", "credential", "credentials",
                     "sensitive", "sensitive-third-party", "third-party-sensitive", "do-not-remember"}
 
 
 class PolicyError(ValueError):
     """A refusal whose message never includes the excluded input or unsafe path."""
+
+
+class _SourceSignature(NamedTuple):
+    size: int
+    mtime_ns: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class _AdmittedSource:
+    text: str
+    signature: _SourceSignature
+
+
+@dataclass(frozen=True)
+class _ExcludedSource:
+    pass
+
+
+@dataclass(frozen=True)
+class _UnavailableSource:
+    pass
+
+
+_SourceObservation = Union[_AdmittedSource, _ExcludedSource, _UnavailableSource]
 
 
 def refusal(error: PolicyError) -> dict:
@@ -378,10 +703,9 @@ class RememberingPolicy:
                     return "explicit_exclusion"
         if any(fm.get(key) is True for key in ("sensitive", "third_party_sensitive", "do_not_remember")):
             return "explicit_exclusion"
-        if _CREDENTIALS.search(text):
-            return "credential_pattern"
-        if _THIRD_PARTY.search(text) or _sensitive_third_party(text):
-            return "third_party_pattern"
+        pattern_reason = _pattern_reason(text)
+        if pattern_reason:
+            return pattern_reason
         expected = {}
         for record in self.state["forgotten"].values():
             for fp in record["fingerprints"]:
@@ -397,26 +721,56 @@ class RememberingPolicy:
         if self.text_reason(text, metadata):
             raise PolicyError(EXCLUDED)
 
-    def read(self, path, *, historical=True):
+    def _observe_source(self, path, *, historical=True) -> _SourceObservation:
+        from knowledgeos import gate
+
+        def revision(info):
+            return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+                    info.st_nlink)
+
         try:
-            path = plain_vault_path(self.vault, Path(path))
+            path = Path(os.path.abspath(Path(path)))
             relative = path.relative_to(self.vault).as_posix()
             if relative in self.state["forgotten"]:
-                return None
+                plain_vault_path(self.vault, path)
+                return _ExcludedSource()
             if not historical and relative in self.state["superseded"]:
-                return None
-            raw = self._read_plain(path)
-            if raw is None:
-                return None
-            if any(hashlib.sha256(raw).hexdigest() == record["sha256"]
+                plain_vault_path(self.vault, path)
+                return _ExcludedSource()
+            expected = gate._binding_file(path)
+            if expected is None:
+                return _UnavailableSource()
+            descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                                 | getattr(os, "O_NONBLOCK", 0))
+            with os.fdopen(descriptor, "rb") as handle:
+                before = os.fstat(handle.fileno())
+                if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                        or revision(before) != revision(expected)):
+                    return _UnavailableSource()
+                raw = handle.read()
+                after = os.fstat(handle.fileno())
+                if (revision(before) != revision(after)
+                        or before.st_ctime_ns != after.st_ctime_ns or len(raw) != after.st_size):
+                    return _UnavailableSource()
+                current = gate._binding_file(path)
+                if (current is None or revision(current) != revision(after)
+                        or current.st_ctime_ns != expected.st_ctime_ns):
+                    return _UnavailableSource()
+            signature = _SourceSignature(after.st_size, after.st_mtime_ns,
+                                         hashlib.sha256(raw).hexdigest())
+            if any(signature.sha256 == record["sha256"]
                    for record in self.state["forgotten"].values()):
-                return None
+                return _ExcludedSource()
             text = raw.decode("utf-8", errors="strict")
         except (OSError, ValueError, UnicodeError):
-            return None
+            return _UnavailableSource()
         if self.text_reason(text) or self.text_reason(relative):
-            return None
-        return text
+            return _ExcludedSource()
+        return _AdmittedSource(text, signature)
+
+    def read(self, path, *, historical=True):
+        observed = self._observe_source(path, historical=historical)
+        return observed.text if isinstance(observed, _AdmittedSource) else None
 
     def attribution(self, path):
         relative = Path(path).relative_to(self.vault).as_posix()
@@ -461,7 +815,7 @@ class RememberingPolicy:
                 relative, parsed = _process_file((path, self.vault, lookup))
                 if isinstance(parsed, Exception):
                     raise PolicyError(UNAVAILABLE)
-                note, links, _fts = parsed
+                note, links, _fts, _signature = parsed
                 conn.execute(_INSERT_NOTE_SQL, note)
                 for destination, raw in links:
                     if destination in allowed and not self.text_reason(raw):
