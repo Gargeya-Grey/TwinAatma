@@ -18,6 +18,7 @@ CLI_COMMANDS = {
     "init",
     "mcp",
     "setup-host",
+    "import",
     "doctor",
     "validate",
     "ids",
