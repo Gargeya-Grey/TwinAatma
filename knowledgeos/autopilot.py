@@ -233,12 +233,18 @@ def profile_is_empty(identity: Any) -> bool:
 
 
 def confirmed_sections(identity: Any) -> dict[str, str]:
-    """The identity sections the person has filled, by key, without the section markers."""
+    """The identity sections the person has filled, by key, without the section markers.
+
+    The line `init` wrote ("Unknown. No owner-confirmed ...") is left out, not the whole
+    section: an approved addition is appended below that line, and it is the person's.
+    """
     sections = identity.get("sections") if isinstance(identity, dict) else None
     confirmed: dict[str, str] = {}
     for key in _IDENTITY_SECTIONS if isinstance(sections, dict) else ():
-        body = _SECTION_MARKER.sub("", str(sections.get(key) or "")).strip()
-        if body and not body.startswith(_UNSET_SECTION):
+        text = _SECTION_MARKER.sub("", str(sections.get(key) or ""))
+        body = "\n".join(line for line in text.splitlines()
+                         if not line.strip().startswith(_UNSET_SECTION)).strip()
+        if body:
             confirmed[key] = body
     return confirmed
 

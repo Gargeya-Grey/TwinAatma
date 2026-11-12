@@ -106,6 +106,91 @@ as a release checklist, run once against a release candidate, not after every ed
 Rows 1 to 6 can all pass with no user. Row 0 cannot, and it decides what is built
 after 0.5.
 
+### State after the 0.5 work
+
+The column "13 Nov" above is the state before the work. This is the state after it,
+on branch `product/one-journey`. Each line says how it was checked.
+
+| # | State | How it was checked |
+|---|---|---|
+| 0 | 0 | No outside tester yet. This row needs the owner. |
+| 1 | Not passed. Claude Code works in the builder's test chats; Codex was not rechecked. | See "What real Claude Code chats showed" below. The chats ran under the builder's account with the builder's own global rules loaded, so they are not acceptance evidence. |
+| 2 | Pass in the source journey | `first_day.py`: after one import the next startup context holds the imported preference and one profile draft waits. No model call. |
+| 3 | The suite's plain-question cases pass | `tests/test_first_contact.py`. The older 7-case count was not run again. Known miss: a question that shares no word and no concept cluster with the note. |
+| 4 | Built, not run for real | The command lines for Claude Code and Codex are built and tested with a recorder in place of the host. A real registration is the person's own step. |
+| 5 | Pass | `tests/test_first_contact.py` and `first_day.py`. |
+| 6 | Full suite green; mutation check not run | 1205 tests, 33 skipped, run alone at commit `cbe764d`. `tests/score.py` reported 100.0 across 71 scenarios at an earlier commit of the same day. |
+
+### What real Claude Code chats showed
+
+Claude Code has a memory of its own, and the model prefers it. With the memory
+server only registered, the model called it in 0 of 3 chats in one run and in 1 of 4
+in another, and both "remember this" chats saved to the host's memory, not to the
+vault. So registration alone does not deliver the product in Claude Code.
+
+`setup-host --host claude-code --global` now also sets two hooks. One shows the
+approved profile and how to use the memory when a session starts. The other shows
+the matching notes before each prompt. With the hooks from a clean install, the
+model called the memory server in 6 of 6 chats, both "remember this" chats saved the
+fact and drafted a profile change and named the terminal command, and the profile
+file was unchanged in 6 of 6.
+
+Open risks from the same chats, each seen once in a small sample:
+
+- In 1 of 3 recall chats one model gave the person only "I'm done" and put the
+  answer in the stored session summary. Two repeats answered correctly.
+- In 1 of 2 "remember this" chats one model also saved the fact to the host's own
+  memory, so the fact was saved twice.
+- The prompt hook starts a process for each prompt. It took 1.6 seconds on a small
+  vault. It is bound by the same freshness check as every memory call, so it is too
+  slow for a 10,000 note vault until the speed work is done.
+
+The cleaner long-term form of this is a Claude Code plugin, which the host installs
+and removes through its own command. It stays under "Later".
+
+### Open design questions after three reviews
+
+An independent reviewer read the 0.5 work three times on 13 November. Each time it
+said "do not ship": 7, then 15, then 11 findings. No review found a way to change the
+profile without the person's decision in a terminal. Three kinds of fault came back
+in all three reviews. A fourth patch of the same kind would not end them, so each is
+a design question for the owner. The defects are listed in
+`.agents/skills/verify-twinaatma/features/first-day.md`.
+
+**1. What marks a note private.** The policy lists the ways a note can say "private".
+Each review found a way that is not on the list; the last one is
+`privacy: [private] # x`.
+
+- Recommended: turn the rule around. A note that carries a privacy key is private
+  unless the value is one of a short list of words that mean "not private". An
+  unknown form withholds the note, and `doctor` names the notes withheld this way.
+- Other option: a full YAML reader. It needs a dependency or a large parser of our own.
+
+**2. Whether an undecided profile draft is memory.** Each route that returns notes
+filters drafts and starter pages itself. Each review found a route without the
+filter; the last one is plain `memory_search`. The same filter also hides a map page
+the person wrote.
+
+- Recommended: a draft is not a note. Drafts stay out of the search index, and one
+  route lists the waiting drafts. A starter page is known by a mark that `init`
+  writes, not by its type, so a person's own map is memory.
+- Other option: drafts stay searchable everywhere and each row says "undecided
+  draft". The suite required this for the startup context until 13 November.
+
+**3. What import defends against.** Import checks paths to keep vault files out of
+its source, and reads files in the vault to know which rules it already asked about.
+Each review found a way around a check: a link, a swapped file, an edited proposal.
+
+- Recommended: state the threat. The person imports files they chose; the checks
+  stop an accident, not a second program that changes files during the run (such a
+  program can read the vault directly). Then read each source through one open
+  handle, name every skipped file, and record "this rule was asked" in the signed
+  record outside the vault. This adds a field to that record.
+- Other option: for 0.5, import one file at a time and track rules only against
+  the profile and the waiting drafts.
+
+One review round is left. It is best spent on the result of these three decisions.
+
 ## Speed at 10,000 notes is deferred, on purpose
 
 Every request reads and hashes every note and recomputes a digest of the whole index.
@@ -151,6 +236,7 @@ optional semantic recall.
 
 ## Decisions that stay with the owner
 
+- The three open design questions above. They block the first release to testers.
 - Inviting the first three to five outside testers (scorecard row 0).
 - Publishing to a package index (it claims the name for good).
 - Announcing the project.

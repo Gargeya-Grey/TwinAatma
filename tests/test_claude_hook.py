@@ -62,6 +62,24 @@ class SessionStart(HookCase):
         self.assertIn("Their profile is empty.", said)
         self.assertNotIn("Unknown.", said)
 
+    def test_the_first_rule_a_new_person_approves_is_shown(self):
+        from knowledgeos.init_vault import init_vault
+        from knowledgeos.memory import MemoryAPI
+
+        fresh = self.root / "fresh"
+        init_vault(fresh, source_root=ROOT, owner_name="New Person", non_interactive=True)
+        api = MemoryAPI(fresh)
+        drafted = api.propose_self_update("Concrete examples", "heuristics",
+                                          "* Always answer with concrete examples.", "Said so.", "append")
+        self.assertTrue(self.approve(drafted["proposal_path"], api).get("ok"))
+        said = self.start(fresh)
+        self.assertIn("Always answer with concrete examples.", said)
+        self.assertNotIn("Their profile is empty.", said)
+        self.assertNotIn("Unknown.", said)
+        started = MemoryAPI(fresh).session_start(task_hint="help me plan my week")
+        self.assertNotIn("tell me a few things", started["soft_prompt"] or "")
+        self.assertNotIn("onboarding", started)
+
     def test_the_text_stays_under_the_limit_of_the_host(self):
         from knowledgeos.gate import replace_section
 
@@ -180,6 +198,23 @@ class InstallTheHooks(TempVaultCase):
         payload = document if isinstance(document, bytes) else json.dumps(document, indent=4).encode("utf-8")
         self.settings.write_bytes(payload)
         return payload
+
+    def test_a_number_that_a_rewrite_would_change_leaves_the_file_alone(self):
+        for text in ('{"precise": 1.234567890123456789}', '{"huge": 1e999}', '{"deep": [{"n": -1e999}]}'):
+            with self.subTest(settings=text):
+                before = self.existing(text.encode("utf-8"))
+                done, message = self.install()
+                self.assertFalse(done, message)
+                self.assertIn("would change in a rewrite", message)
+                self.assertIn("claude-code", message)
+                self.assertEqual(self.settings.read_bytes(), before)
+
+    def test_ordinary_numbers_are_kept_as_they_are(self):
+        self.existing(b'{"ratio": 1.50, "small": 1e-3, "count": 12345678901234567890, "zero": -0.0}')
+        done, message = self.install()
+        self.assertTrue(done, message)
+        held = self.held()
+        self.assertEqual((held["ratio"], held["small"], held["count"]), (1.5, 0.001, 12345678901234567890))
 
     def test_a_new_file_gets_one_entry_per_event(self):
         done, message = self.install()

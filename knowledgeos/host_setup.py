@@ -384,9 +384,21 @@ def _is_claude_hook(handler: object, command: str) -> bool:
 
 
 def _strict_json(raw: bytes) -> object:
-    """Parse JSON, and refuse what a rewrite would change: NaN, Infinity, a repeated key."""
+    """Parse JSON, and refuse what a rewrite would change.
+
+    That is NaN, Infinity, a repeated key, and a number that a float cannot hold exactly
+    (`1.234567890123456789`, `1e999`).
+    """
+    from decimal import Decimal
+
     def constant(name: str) -> object:
         raise ValueError(f"{name} is not JSON")
+
+    def number(text: str) -> float:
+        value = float(text)
+        if value in (float("inf"), float("-inf")) or Decimal(repr(value)) != Decimal(text):
+            raise ValueError(f"the number {text} would change in a rewrite")
+        return value
 
     def pairs(items: list[tuple[str, object]]) -> dict:
         document = dict(items)
@@ -394,7 +406,8 @@ def _strict_json(raw: bytes) -> object:
             raise ValueError("a key appears twice in one object")
         return document
 
-    return json.loads(raw.decode("utf-8-sig"), parse_constant=constant, object_pairs_hook=pairs)
+    return json.loads(raw.decode("utf-8-sig"), parse_constant=constant, parse_float=number,
+                      object_pairs_hook=pairs)
 
 
 def _replace_if_unchanged(path: Path, payload: bytes, original: bytes | None) -> bool:

@@ -244,6 +244,13 @@ class RequestFreshnessTests(unittest.TestCase):
             proposals = list((self.vault / "People/Self-Proposals").glob("*.md"))
             self.assertEqual(len(proposals), 1)
             expected_path = proposals[0].relative_to(self.vault).as_posix()
+            # The write is in the index when startup ends. This looks at the index itself,
+            # before any other memory call, because a later call would bring a stale index
+            # up to date and hide a startup that did not.
+            with sqlite3.connect(self.api.db_path) as conn:
+                indexed = conn.execute("SELECT count(*) FROM notes WHERE path = ?", (expected_path,)).fetchone()[0]
+            conn.close()
+            self.assertEqual(indexed, 1)
             # The write is seen inside the same request: a search that names the draft finds it.
             found = dispatch(self.api, "memory_search", {"query": "Self proposal"})
             self.assertIn(expected_path, [row["path"] for row in found["ranked"]])

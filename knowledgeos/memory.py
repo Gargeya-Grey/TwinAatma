@@ -1165,20 +1165,23 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
             for row in relevant.get("ranked", []):
                 note = self.get_note(row["path"], max_chars=1200, task_hint=task_hint)
                 # The read that supplies the excerpt also says what the note is now. A
-                # note that became a template since the search is not offered.
+                # note that cannot be read any more (made private, forgotten, deleted) or
+                # that became a template since the search is not offered: the row holds
+                # text from the earlier read.
+                if note.get("error"):
+                    continue
                 now = {"path": row["path"],
                        "type": (note.get("frontmatter") or {}).get("type") or row.get("type")}
                 if not without_scaffold([now]):
                     continue
                 offered.append(row)
-                if not note.get("error"):
-                    row["excerpt"] = note["body"]
-                    row["excerpt_truncated"] = note["truncated"]
-                    row["excerpt_start"] = note["body_start"]
-                    row["excerpt_end"] = note["body_end"]
-                    row["sha256"] = note["sha256"]
-                    if row.get("snippet") and row["snippet"] in row["excerpt"]:
-                        row.pop("snippet", None)
+                row["excerpt"] = note["body"]
+                row["excerpt_truncated"] = note["truncated"]
+                row["excerpt_start"] = note["body_start"]
+                row["excerpt_end"] = note["body_end"]
+                row["sha256"] = note["sha256"]
+                if row.get("snippet") and row["snippet"] in row["excerpt"]:
+                    row.pop("snippet", None)
                 for key in ("score", "source", "rank"):
                     row.pop(key, None)
                 for key in ("type", "status", "entity_id"):

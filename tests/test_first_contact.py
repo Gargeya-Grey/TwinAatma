@@ -154,6 +154,26 @@ class CleanStarter(FirstContactCase):
             relevant = self.api().bootstrap_context(task_hint="indigo compass plan")["relevant"]
         self.assertNotIn("indigo compass", repr(relevant).lower())
 
+    def test_a_note_made_private_while_it_was_read_is_not_offered(self):
+        kept = self.api().capture("Amber cobalt plan", "The amber cobalt deadline is in March.")
+        self.assertTrue(kept.get("ok"), kept)
+        hint = "amber cobalt deadline"
+        self.assertIn("amber cobalt", repr(self.api().bootstrap_context(task_hint=hint)["relevant"]).lower())
+        target = self.vault / kept["path"]
+        real = MemoryAPI.get_note
+
+        def made_private_first(api, path_or_id, *args, **kwargs):
+            raw = target.read_bytes()
+            if b"privacy: private" not in raw:
+                target.write_bytes(re.sub(rb"\A---(\r?\n)", rb"---\1privacy: private\1", raw, count=1))
+            return real(api, path_or_id, *args, **kwargs)
+
+        with mock.patch.object(MemoryAPI, "get_note", made_private_first):
+            relevant = self.api().bootstrap_context(task_hint=hint)["relevant"]
+        self.assertIn(b"privacy: private", target.read_bytes())
+        self.assertNotIn("amber cobalt", repr(relevant).lower())
+        self.assertNotIn(kept["path"], repr(relevant))
+
     def test_a_real_memory_still_reaches_the_first_context(self):
         captured = self.remember("Berlin offer", "The Berlin job offer pays less but the team is stronger.")
         started = self.api().session_start(task_hint="decide whether to take the Berlin job")

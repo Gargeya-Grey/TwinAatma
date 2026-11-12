@@ -80,8 +80,9 @@ Lines that read like standing rules become **one profile draft**. `self review` 
 every waiting draft once: `y` applies it, `d` discards it, anything else keeps it for
 later. `--dry-run` counts what an import would do and writes nothing.
 
-**5. Chat.** In the first chat the assistant asks once whether you want to tell it a few
-things about yourself. Answer or skip it.
+**5. Chat.** In the first chat of a vault that holds no note of your own yet, the
+assistant asks once whether you want to tell it a few things about yourself. Answer or
+skip it. After an import it does not ask, because it already has your notes.
 
 `init` creates the folders, `People/Self.md`, Agent rules, the Cursor hook *config*, a
 project MCP config at `.cursor/mcp.json`, and a ready search index. It never overwrites
