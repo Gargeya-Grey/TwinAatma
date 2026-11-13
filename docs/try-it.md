@@ -67,7 +67,7 @@ Expected: the answer, and you did not say it again.
 twinaatma doctor
 ```
 
-Expected: no line that starts with a failure mark.
+Expected: the last line is `[OK] Environment check PASSED.`
 
 ## To undo
 

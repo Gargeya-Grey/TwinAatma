@@ -183,7 +183,7 @@ class AutopilotTests(TempVaultCase):
         prompt, key = soft_prompt_for_human(
             {"open_proposals": [{"path": "x"}], "pending_outcomes": []}
         )
-        self.assertIn("remember", prompt.lower())
+        self.assertIn("twinaatma self review", prompt)
         self.assertEqual(key, "x")
         # Already asked once: an open proposal must not nag every single chat.
         self.assertEqual(

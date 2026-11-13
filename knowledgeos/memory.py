@@ -1301,8 +1301,8 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
             )
         if open_props:
             needs.append(
-                f"{len(open_props)} preference update(s) await a soft yes/no "
-                '("Want me to remember that?").'
+                f"{len(open_props)} change(s) to the profile wait for the person's decision. "
+                "Only they decide, with `twinaatma self review` in a terminal."
             )
         try:
             ctx = self.bootstrap_context(limit=5)
@@ -1418,14 +1418,14 @@ This is a scratch draft you review; it is not a Self proposal and grants no acce
         # `ask_human` was that list or a string depending on whether anything was
         # pending — a truthy list either way, which meant `ask_human` was never falsy and
         # a caller string-joining it printed `('Want me to remember that?', 'People/...')`.
-        from knowledgeos.autopilot import load_state, save_state
+        from knowledgeos.autopilot import covered_keys, load_state, save_state
 
         state = load_state(self.vault)
         asked = set(state.get("soft_prompts_asked") or [])
         ops = self.ops_status(skip_review_paths=asked)
         soft, soft_key = soft_prompt_for_human(ops, orphan_unsaved=False, asked=asked)
         if soft_key:
-            asked.add(soft_key)
+            asked.update(covered_keys(ops, soft_key))
             state["soft_prompts_asked"] = sorted(asked)
             save_state(self.vault, state)
         result["ops"] = {
@@ -2044,7 +2044,7 @@ TOOL_SPECS = [
         "name": "memory_session_end",
         "description": (
             "Call when useful work wraps up with a required nonempty summary. Captures it to Inbox, refreshes index, "
-            "returns soft_prompt if a remember-this confirmation is pending."
+            "returns soft_prompt when something waits for the person."
         ),
         "inputSchema": {
             "type": "object",

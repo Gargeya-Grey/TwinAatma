@@ -105,7 +105,7 @@ Then **just chat**. Autopilot keeps the twin current:
 |---|---|
 | Chat starts | Host pre-warms the index; the agent's first tool call loads Self + relevant memory |
 | During chat | Captures + search without you managing folders |
-| Preference change | Soft “Want me to remember that?” → yes/no |
+| Preference change | The agent drafts it. You decide with `twinaatma self review` in a terminal; a later chat reminds you once |
 | Chat ends usefully | Session summary saved; index freshened |
 | ~Weekly | Activity reviewed without inferring a belief change |
 

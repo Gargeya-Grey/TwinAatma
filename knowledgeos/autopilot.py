@@ -287,8 +287,13 @@ def soft_prompt_for_human(
     props = ops.get("open_proposals") or []
     fresh = [p for p in props if str(p.get("path") or p.get("proposal_path") or "") not in asked]
     if fresh:
+        # Not a question: a yes in chat decides nothing, only the terminal does.
         key = str(fresh[0].get("path") or fresh[0].get("proposal_path") or "")
-        return "Want me to remember that preference going forward?", key
+        count = max(len(props), int(ops.get("open_proposals_count") or 0))
+        waits = ("One change to your profile waits" if count == 1
+                 else f"{count} changes to your profile wait")
+        return (f"{waits} for your decision. Run `twinaatma self review` in a terminal "
+                "when you want to decide."), key
     from knowledgeos.evolution import outcome_review_due
 
     pending = ops.get("due_outcomes", ops.get("pending_outcomes")) or []
@@ -301,6 +306,13 @@ def soft_prompt_for_human(
     if profile_empty and ONBOARDING_KEY not in asked:
         return _ONBOARDING_PROMPT, ONBOARDING_KEY
     return None, None
+
+
+def covered_keys(ops: dict[str, Any], key: str) -> set[str]:
+    """Every key that one prompt answers. The reminder about waiting changes counts them all."""
+    waiting = {str(p.get("path") or p.get("proposal_path") or "")
+               for p in ops.get("open_proposals") or []}
+    return waiting if key in waiting else {key}
 
 
 # Everything that can start a prompt delimiter, fake a role header, or open markup is
@@ -410,7 +422,7 @@ def _breathe(
             profile_empty=profile_is_empty(ctx.get("self")) and not has_own_notes(api),
         )
         if soft_key:
-            asked.add(soft_key)
+            asked.update(covered_keys(ops, soft_key))
             state["soft_prompts_asked"] = sorted(asked)
             if soft_key == "orphan":
                 for record in (state.get("sessions") or {}).values():
@@ -455,11 +467,13 @@ def _breathe(
             "When preferences change, memory_propose_self_update, then tell the human the "
             "one command to approve it — never edit Self.md and never approve it yourself. "
             "`twinaatma self review` decides every waiting draft in one sitting.",
-            "If soft_prompt is set, ask it once in plain language (no product names).",
+            "If soft_prompt is set, say it once in plain language (no product names). It "
+            "is complete as it stands: add nothing from an earlier chat to it.",
             "Near end of useful work, call memory_session_end with a short summary.",
         ],
         "user_experience_rule": (
-            "The human finished setup. Never ask them to run toolkit commands, "
+            "The human finished setup. The one command they ever run is `twinaatma self "
+            "review`, to decide a change to their profile. Never ask them to run a script, "
             "rebuild indexes, or manage cadences. Only help; keep the twin current yourself."
         ),
         "context": ctx,

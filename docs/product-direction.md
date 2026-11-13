@@ -119,7 +119,7 @@ on branch `product/one-journey`. Each line says how it was checked.
 | 3 | The suite's plain-question cases pass | `tests/test_first_contact.py`. The older 7-case count was not run again. Known miss: a question that shares no word and no concept cluster with the note. |
 | 4 | Built, not run for real | The command lines for Claude Code and Codex are built and tested with a recorder in place of the host. A real registration is the person's own step. |
 | 5 | Pass | `tests/test_first_contact.py` and `first_day.py`. |
-| 6 | Full suite green on the commit that holds the sixth-review repairs | 1269 tests, 33 skipped, run alone on Windows with Python 3.13 (1249 at `a0171e0`). `tests/score.py` reported 100.0 across 71 scenarios on the same code, and `first_day.py` 37 of 37. Commit `fd1bac1` between the two was red on 15 tests: its reader refused the JSON record of an outcome. It was committed after focused tests only; the next commit repaired it. On Python 3.11 only five changed test files were run here; CI runs the whole suite on 3.11 and on Linux. |
+| 6 | Full suite green on the commit that holds the sixth-review repairs and the reminder repair | 1273 tests, 33 skipped, run alone on Windows with Python 3.13 (1269 at `ab3651b`, 1249 at `a0171e0`). `tests/score.py` reported 100.0 across 71 scenarios on the same code, and `first_day.py` 37 of 37. Commit `fd1bac1` between the two was red on 15 tests: its reader refused the JSON record of an outcome. It was committed after focused tests only; the next commit repaired it. On Python 3.11 only five changed test files were run here; CI runs the whole suite on 3.11 and on Linux. |
 
 ### What real Claude Code chats showed
 
@@ -144,6 +144,17 @@ Open risks from the same chats, each seen once in a small sample:
 - The prompt hook starts a process for each prompt. It took 1.6 seconds on a small
   vault. It is bound by the same freshness check as every memory call, so it is too
   slow for a 10,000 note vault until the speed work is done.
+
+Three chats with the words of the tester page (`docs/try-it.md`), from a fresh install
+on 13 November, showed one more fault. A profile draft waited, and the next chat was
+told to ask "Want me to remember that preference going forward?". The question named
+no preference, so the model took one from an earlier chat and spoke of "an earlier
+unfinished session". A yes in chat decides nothing: only `twinaatma self review` does.
+The reminder is now a statement with the count and that command. It is said once for
+every draft that waits at that moment. The same chats after the repair said "One
+change to your profile is waiting for your decision. Run `twinaatma self review` in a
+terminal when you want to decide." The rule for the assistant no longer forbids every
+command; it names that one.
 
 The cleaner long-term form of this is a Claude Code plugin, which the host installs
 and removes through its own command. It stays under "Later".
@@ -317,7 +328,7 @@ Each step below needs the step under it.
 | 6. Three to five people finish day one | Step 5, a one-page test script, a place for reports | The script is `docs/try-it.md`; reports come as issues on the repository. Only Claude Code was run for real; Codex, Cursor and Claude Desktop were not. | Owner invites |
 | 5. A stranger can install what was built | `pip install git+https://github.com/Gargeya-Grey/TwinAatma` installs `main`, so the work must be on `main` | 39 commits are not pushed. They change code, tests, skills, documents, scripts and two workflows; no note folders. | Owner says yes to the push |
 | 4. The pull request is green | The suite on Linux and Windows, Python 3.11 and 3.13 | The suite ran only on Windows with 3.13. The check of the privacy reader was skipped in CI, because CI had no YAML parser; CI now installs one. | Builder |
-| 3. The last commit is proved here | Full suite, the first-day driver, one fresh install with a real chat | In progress on the day of writing. | Builder |
+| 3. The last commit is proved here | Full suite, the first-day driver, one fresh install with a real chat | Done on 13 November: see row 6 above and "What real Claude Code chats showed". | Builder |
 
 What this order changes:
 

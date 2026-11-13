@@ -261,5 +261,44 @@ class FirstRunQuestion(FirstContactCase):
         self.assertIn("tell me a few things", self.start()["soft_prompt"] or "")
 
 
+class AWaitingProfileChange(FirstContactCase):
+    """A change that waits is the person's to decide, in a terminal. A yes in chat decides nothing."""
+
+    def draft(self, rule: str, section: str = "heuristics") -> None:
+        result = self.api().propose_self_update(rule, section, f"- {rule}.", mode="append")
+        self.assertIn("proposal_path", result, result)
+
+    def test_the_reminder_names_the_step_that_decides_it(self):
+        self.draft("Answer in short sentences")
+        started = self.api().session_start("Where is my staging database?")
+        said = started["soft_prompt"] or ""
+        self.assertIn("One change to your profile waits", said)
+        self.assertIn("twinaatma self review", said)
+        self.assertNotIn("?", said, "a question that a yes in chat cannot answer")
+        status = " ".join(started["ops"]["plain_language"])
+        self.assertIn("twinaatma self review", status)
+        self.assertNotIn("yes/no", status)
+
+    def test_one_reminder_covers_every_waiting_change(self):
+        self.draft("Answer in short sentences")
+        self.draft("Name the source of a fact", section="values")
+        first = self.api().session_start("Plan my week")
+        self.assertIn("2 changes to your profile wait", first["soft_prompt"] or "")
+        self.assertIsNone(self.api().session_start("Plan my month")["soft_prompt"])
+
+    def test_a_reminder_at_the_end_of_a_chat_also_covers_every_change(self):
+        opened = self.api().session_start("Plan my week")
+        self.draft("Answer in short sentences")
+        self.draft("Name the source of a fact", section="values")
+        ended = self.api().session_end("Planned the week", session_id=opened["session_id"])
+        self.assertIn("2 changes to your profile wait", ended["soft_prompt"] or "")
+        self.assertIsNone(self.api().session_start("Plan my month")["soft_prompt"])
+
+    def test_the_rule_for_the_assistant_allows_the_one_command(self):
+        rule = self.api().session_start("Plan my week")["user_experience_rule"]
+        self.assertIn("twinaatma self review", rule)
+        self.assertNotIn("Never ask them to run toolkit commands", rule)
+
+
 if __name__ == "__main__":
     unittest.main()
