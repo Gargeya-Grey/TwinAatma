@@ -95,6 +95,7 @@ the check first, so that it fails on the fault, then the code.
 | A text that holds a marked metadata block, at its start or further down, is not saved as an ordinary note | `tests/test_privacy_metadata_comments.py`, class `ANoteAboutPrivacy` |
 | Import does not enter a link while it walks, and names what it skips or withholds | `tests/test_import_memory.py` |
 | A document names only tools that exist | `tests/test_docs.py` |
+| A seeded defect of the mutation check names code that exists | `tests/test_mutation_targets.py`; after a rewrite of such code, run `python tests/mutation_check.py` |
 
 Never run `setup-host --global` on the owner's machine without `--print`. It registers a
 server with the owner's hosts and, for Claude Code, changes `~/.claude/settings.json`.

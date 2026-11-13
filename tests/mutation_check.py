@@ -115,7 +115,8 @@ MUTATIONS = [
         """            row = self.conn.execute(
                 "SELECT count(*) FROM t WHERE t MATCH ?", (self.query,)
             ).fetchone()
-            return bool(row and row[0])""",
+            if row and row[0]:
+                return True""",
         """            return self.raw.lower() in (text or "").lower()""",
     ),
     (
@@ -182,8 +183,8 @@ MUTATIONS = [
             ),
             (
                 "knowledgeos/indexer.py",
-                """    if expected_index and index_state(db_path) == "ok":""",
-                """    if False and expected_index and index_state(db_path) == "ok":""",
+                """    if inspection is None or inspection.digest != expected_index:""",
+                """    if inspection is None:""",
             ),
         ],
     ),
@@ -194,15 +195,15 @@ MUTATIONS = [
         # body then survives forever because every rebuild says "unchanged".
         "truth.a_forged_index_row_cannot_hide_a_note",
         "knowledgeos/indexer.py",
-        """    if expected_index and index_state(db_path) == "ok":""",
-        """    if False and expected_index and index_state(db_path) == "ok":""",
+        """    if inspection is None or inspection.digest != expected_index:""",
+        """    if inspection is None:""",
     ),
     (
         # Round 12 CRITICAL: drop the digest, so a tampered index reads as fresh.
         "truth.deleted_index_rows_are_repaired",
         "knowledgeos/indexer.py",
-        """    if expected_index and index_state(db_path) == "ok":""",
-        """    if False and expected_index and index_state(db_path) == "ok":""",
+        """    if inspection is None or inspection.digest != expected_index:""",
+        """    if inspection is None:""",
     ),
     (
         # Round 12 HIGH: let the pending-outcome filter run on index columns again.
@@ -245,8 +246,14 @@ MUTATIONS = [
             ),
             (
                 "knowledgeos/indexer.py",
-                '''            if current == vault and name == "Templates":''',
-                '''            if False:''',
+                '''        return (name in SKIP_DIRS or current == vault and name == "Templates"''',
+                '''        return (name in SKIP_DIRS or False and name == "Templates"''',
+            ),
+            (
+                # The starter filter of the first-day work holds the same claim.
+                "knowledgeos/memory.py",
+                '''        rows = without_scaffold([row for row in rows if str(row.get("type") or "") == "decision"])''',
+                '''        rows = [row for row in rows if str(row.get("type") or "") == "decision"]''',
             ),
         ],
     ),
@@ -329,9 +336,8 @@ MUTATIONS = [
         [
             (
                 "knowledgeos/indexer.py",
-                """    if current_digest != expected_digest:
-        return rebuild_index(vault)""",
-                """    pass""",
+                """            if current_digest and current_digest == expected_digest:""",
+                """            if current_digest:""",
             ),
             (
                 "knowledgeos/memory.py",
@@ -359,9 +365,8 @@ MUTATIONS = [
         [
             (
                 "knowledgeos/indexer.py",
-                """    if current_digest != expected_digest:
-        return rebuild_index(vault)""",
-                """    pass""",
+                """            if current_digest and current_digest == expected_digest:""",
+                """            if current_digest:""",
             ),
             (
                 "knowledgeos/indexer.py",
@@ -504,7 +509,7 @@ MUTATIONS = [
             ),
             (
                 "knowledgeos/memory.py",
-                '''                    text = RememberingPolicy(self.vault).read(path, historical=False)''',
+                '''                    text = policy.read(path, historical=False)''',
                 '''                    text = path.read_text(encoding="utf-8", errors="replace")''',
             ),
         ],
