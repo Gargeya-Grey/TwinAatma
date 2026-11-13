@@ -133,7 +133,7 @@ class CleanStarter(FirstContactCase):
         path = self.vault / kept["path"]
         text = path.read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^type: ")
-        path.write_text(re.sub(r"^type: .*$", "type: moc", text, count=1, flags=re.M), encoding="utf-8")
+        path.write_text(re.sub(r"^type: .*$", "type: template", text, count=1, flags=re.M), encoding="utf-8")
         with mock.patch.object(MemoryAPI, "_ensure_index", lambda *args, **kwargs: None):
             related = self.api().search(question).get("possibly_related")
             relevant = self.api().bootstrap_context(task_hint="zanzibar ledger plan")["relevant"]

@@ -249,10 +249,27 @@ _POSSIBLY_RELATED_NOTE = (
 )
 
 
+def is_undecided_draft(path: str) -> bool:
+    """True for a file in the profile-draft folder, in any spelling of its name.
+
+    A draft is not a note. No route that returns notes returns one: `MemoryAPI._refresh_rows`
+    drops it, and `tests/test_draft_is_not_memory.py` asks every read tool. A draft is
+    reached on purpose, by `memory_list_self_proposals` or by its own path.
+    """
+    return path.replace("\\", "/").casefold().startswith(_UNDECIDED_DRAFTS.casefold())
+
+
 def _is_scaffold(path: str, note_type: str) -> bool:
     # Compared without case: on Windows `templates/` is the same folder as `Templates/`.
-    return ((note_type or "").strip().lower() in _SCAFFOLD_TYPES
-            or path.casefold().startswith(("templates/", _UNDECIDED_DRAFTS.casefold())))
+    folded = path.replace("\\", "/").casefold()
+    kind = (note_type or "").strip().lower()
+    if kind == "template" or folded.startswith("templates/") or is_undecided_draft(path):
+        return True
+    # A map or an index is a starter page only under a name `init` and the toolkit
+    # write: one that starts with `_` (`_Index.md`, `_MOC_Master.md`), or the vault's
+    # own `README.md`. A map the person wrote under a name of their own is memory.
+    # `tests/test_draft_is_not_memory.py` holds a new vault to this rule.
+    return kind in _SCAFFOLD_TYPES and (folded.rsplit("/", 1)[-1].startswith("_") or folded == "readme.md")
 
 
 def without_scaffold(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:

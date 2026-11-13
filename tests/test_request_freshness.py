@@ -251,12 +251,15 @@ class RequestFreshnessTests(unittest.TestCase):
                 indexed = conn.execute("SELECT count(*) FROM notes WHERE path = ?", (expected_path,)).fetchone()[0]
             conn.close()
             self.assertEqual(indexed, 1)
-            # The write is seen inside the same request: a search that names the draft finds it.
+            # The draft is reached on purpose, in the same request: the list of drafts names it.
+            listed = dispatch(self.api, "memory_list_self_proposals")
+            self.assertIn(expected_path, json.dumps(listed))
             found = dispatch(self.api, "memory_search", {"query": "Self proposal"})
-            self.assertIn(expected_path, [row["path"] for row in found["ranked"]])
+            self.assertNotIn(expected_path, json.dumps(found))
         # Changed on 13 November 2026. This test used to require the new draft in the
-        # startup context. A draft that nobody decided is not memory: offered there, an
-        # agent's own proposal reaches every assistant before the person approves it.
+        # startup context. A draft that nobody decided is not a note: returned by a note
+        # route, an agent's own proposal reaches every assistant before the person
+        # approves it. `tests/test_draft_is_not_memory.py` holds every read tool to this.
         self.assertNotIn(expected_path, [row["path"] for row in result["context"]["relevant"].get("ranked", [])])
 
 

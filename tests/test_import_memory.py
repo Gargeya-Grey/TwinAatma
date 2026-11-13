@@ -151,7 +151,12 @@ class ImportMemory(ImportCase):
     def test_a_source_marked_private_is_withheld(self):
         for name, marker in (("a.md", "privacy: private"), ("b.md", "do_not_remember: true"),
                              ("c.md", "privacy: private # do not import"),
-                             ("d.md", "do_not_remember: true # opted out")):
+                             ("d.md", "do_not_remember: true # opted out"),
+                             ("e.md", "privacy: [private] # a list with a note"),
+                             ("f.md", "privacy: private\nprivacy: public"),
+                             ("g.md", "privacy: something-new"),
+                             ("h.md", '"privacy": private'),
+                             ("i.md", "do-not-remember: yes")):
             with self.subTest(marker=marker):
                 before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
                 source = self.source(name, f"---\n{marker}\n---\n\n- Prefers the copper meadow route to work.\n"
@@ -242,6 +247,87 @@ class ImportMemory(ImportCase):
         self.assertIn("Prefers small commits", drafted)
         self.assertNotIn("Never merges on a Friday", drafted)
         self.assertEqual((third["rule_like_lines"], third["profile_draft"]), (0, second["profile_draft"]), third)
+
+    def test_a_rejected_rule_stays_rejected_when_its_draft_file_changes(self):
+        for change in ("edited", "deleted"):
+            with self.subTest(change=change):
+                rule = f"Never writes the {change} weekly report."
+                source = self.source(f"{change}.md", f"- {rule}\n")
+                first = importer.import_path(self.api(), source, "Rules")
+                self.assertNotIn("error", self.api().reject_self_update(first["profile_draft"], "Not mine."))
+                draft = self.vault / first["profile_draft"]
+                if change == "edited":
+                    draft.write_text(draft.read_text(encoding="utf-8").replace(rule, "Something else."),
+                                     encoding="utf-8")
+                else:
+                    draft.unlink()
+                again = importer.import_path(self.api(), source, "Rules")
+                self.assertEqual((again["rule_like_lines"], again["profile_draft"]), (0, None), again)
+                self.assertEqual(again["drafts_not_checked"], 0, again)
+
+    def test_an_older_draft_without_line_digests_counts_only_while_its_file_is_whole(self):
+        from knowledgeos import gate
+
+        rule = "Always keeps the older ledger rule."
+        source = self.source("older.md", f"- {rule}\n")
+        first = importer.import_path(self.api(), source, "Rules")
+        rows = gate.read_ledger(self.vault)[0]
+        for row in rows:
+            self.assertTrue(row.pop("asked_lines"))
+        gate._write_ledger(self.vault, rows)
+        whole = importer.import_path(self.api(), source, "Rules")
+        self.assertEqual((whole["rule_like_lines"], whole["drafts_not_checked"]), (0, 0), whole)
+        self.assertEqual(whole["profile_draft"], first["profile_draft"])
+        draft = self.vault / first["profile_draft"]
+        draft.write_text(draft.read_text(encoding="utf-8").replace(rule, "Something else."), encoding="utf-8")
+        changed = importer.import_path(self.api(), source, "Rules")
+        self.assertEqual(changed["drafts_not_checked"], 1, changed)
+        self.assertTrue(any("could not be checked" in problem for problem in changed["problems"]), changed)
+
+    def test_a_file_swapped_for_a_vault_file_after_the_check_is_not_read(self):
+        inside = self.vault / "Inbox" / "old-plan.md"
+        inside.write_text("---\ntitle: Old plan\ntype: note\n---\n\nThe old plan was to ship in March.\n",
+                          encoding="utf-8")
+        source = self.source("swapped.md", "The new plan is to ship in June.\n")
+        real_open = open
+
+        def swap_then_open(file, *args, **kwargs):
+            if str(file).endswith("swapped.md") and source.stat().st_nlink == 1:
+                source.unlink()
+                try:
+                    os.link(inside, source)
+                except OSError:
+                    self.skipTest("this file system has no hard links")
+            return real_open(file, *args, **kwargs)
+
+        with mock.patch("knowledgeos.importer.open", swap_then_open, create=True):
+            report = importer.import_path(self.api(), source, "Swapped", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (0, 0), report)
+        self.assertTrue(any("swapped.md" in problem for problem in report["problems"]), report["problems"])
+        self.assertNotIn("March", repr(report))
+
+    def test_a_linked_file_in_a_folder_is_named(self):
+        folder = self.root / "exports" / "with-link"
+        folder.mkdir(parents=True)
+        (folder / "one.md").write_text("The first plan is to ship in June.\n", encoding="utf-8")
+        (folder / "linked.md").write_text("The linked plan is to ship in July.\n", encoding="utf-8")
+        from knowledgeos import indexer
+
+        real = indexer._is_link
+        with mock.patch.object(indexer, "_is_link",
+                               lambda path, **kwargs: path.name == "linked.md" or real(path, **kwargs)):
+            report = importer.import_path(self.api(), folder, "Linked", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (1, 1), report)
+        self.assertTrue(any("is a link" in problem and "linked.md" in problem for problem in report["problems"]),
+                        report["problems"])
+
+    def test_two_labels_that_look_alike_are_two_sources(self):
+        source = self.source("same.md", "The shared plan is to ship in June.\n")
+        first = importer.import_path(self.api(), source, "Chat GPT", draft_profile=False)
+        second = importer.import_path(self.api(), source, "chat-gpt", draft_profile=False)
+        again = importer.import_path(self.api(), source, "chat-gpt", draft_profile=False)
+        self.assertEqual((first["imported"], second["imported"], second["already_present"]), (1, 1, 0), second)
+        self.assertEqual((again["imported"], again["already_present"]), (0, 1), again)
 
     def test_a_rule_that_is_part_of_another_rule_is_still_drafted(self):
         first = importer.import_path(

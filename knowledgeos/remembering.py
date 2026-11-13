@@ -384,12 +384,81 @@ def _pattern_reason(text):
     return _uncached_pattern_reason(text)
 
 
-_EXCLUDED_LABELS = {"exclude", "excluded", "private", "secret", "credential", "credentials",
-                    "sensitive", "sensitive-third-party", "third-party-sensitive", "do-not-remember"}
-
-
+# The privacy rule fails closed. A note that carries one of these keys is private unless
+# every value is a word from the short list that means "not private". A value this code
+# cannot read (a new spelling, a YAML form it does not know) withholds the note. The
+# list of words that mean "private" was the other way round, and each review found a
+# spelling that was not on it.
+_PRIVACY_KEYS = {"privacy", "memory_privacy", "sensitivity", "memory_policy"}
+_FLAG_KEYS = {"sensitive", "third_party_sensitive", "do_not_remember"}
+_OPEN_LABELS = {"", "ordinary", "public", "shared", "open", "normal", "none", "low",
+                "false", "no", "off", "0", "null", "~"}
 _YAML_COMMENT = re.compile(r"\s+#.*$")
 _FLAG_NOT_SET = {"", "false", "no", "off", "0", "null", "none", "~"}
+# The metadata block as the policy reads it: leading blank lines are allowed, `...` ends
+# it too, and a block with no end runs to the end of the text.
+_METADATA_BLOCK = re.compile(
+    r"\A\ufeff?\s*---[ \t]*\r?\n(.*?)(?:\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)|\Z)", re.S)
+
+
+def _metadata_key(raw) -> str:
+    """A key as it is compared: no quotes, no case, `-` and spaces as `_`."""
+    return re.sub(r"[\s\-]+", "_", str(raw).strip().strip("\"'").strip().casefold())
+
+
+def _labels(value) -> list:
+    """Every label in a privacy value. `[a, b] # note` is a list too."""
+    if isinstance(value, (list, tuple, set)):
+        return [label for item in value for label in _labels(item)]
+    value = _plain_scalar(value)
+    if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
+        return [_plain_scalar(part) for part in value[1:-1].split(",")]
+    return [value]
+
+
+def _label_is_open(label) -> bool:
+    if label is None or label is False:
+        return True
+    return isinstance(label, str) and label.casefold() in _OPEN_LABELS
+
+
+def _pairs_exclude(pairs) -> bool:
+    """True when one ``(key, value)`` pair marks the text as not to be remembered."""
+    for raw_key, value in pairs:
+        key = _metadata_key(raw_key)
+        if key in _PRIVACY_KEYS and not all(_label_is_open(label) for label in _labels(value)):
+            return True
+        if key in _FLAG_KEYS and any(_flag_is_set(item) for item in
+                                     (value if isinstance(value, (list, tuple, set)) else [value])):
+            return True
+    return False
+
+
+def _metadata_pairs(text: str) -> list[tuple[str, list[str]]]:
+    """Each key line of the metadata block with its values, a repeated key included.
+
+    A parsed mapping keeps one value for a key that appears twice. The policy reads the
+    lines, so `privacy: private` counts wherever it stands.
+    """
+    match = _METADATA_BLOCK.match(text)
+    pairs: list[tuple[str, list[str]]] = []
+    for line in match.group(1).splitlines() if match else ():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith("-") and pairs:
+            pairs[-1][1].append(stripped[1:])
+        elif ":" in line:
+            key, _, rest = line.partition(":")
+            pairs.append((key, [rest]))
+    return pairs
+
+
+def marked_excluded(text: str = "", metadata=None) -> bool:
+    """True when the text's own metadata, or the given mapping, says "do not remember"."""
+    if isinstance(metadata, dict) and _pairs_exclude(metadata.items()):
+        return True
+    return _pairs_exclude(_metadata_pairs(str(text or "")))
 
 
 def _plain_scalar(value):
@@ -712,16 +781,7 @@ class RememberingPolicy:
 
     def text_reason(self, text, metadata=None):
         text = str(text or "")
-        fm = metadata if metadata is not None else split_frontmatter(text)[0]
-        for key in ("privacy", "memory_privacy", "sensitivity", "memory_policy"):
-            value = fm.get(key)
-            labels = value if isinstance(value, list) else [value]
-            for label in labels:
-                label = _plain_scalar(label)
-                if label and (not isinstance(label, str)
-                              or label.casefold() in _EXCLUDED_LABELS):
-                    return "explicit_exclusion"
-        if any(_flag_is_set(fm.get(key)) for key in ("sensitive", "third_party_sensitive", "do_not_remember")):
+        if marked_excluded(text, metadata):
             return "explicit_exclusion"
         pattern_reason = _pattern_reason(text)
         if pattern_reason:

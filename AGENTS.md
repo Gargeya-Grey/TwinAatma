@@ -78,6 +78,12 @@ Read `docs/product-direction.md` for what is built next, and
 `outputs/handoffs/CURRENT.md` for the latest handoff. Recheck the checkout before you
 rely on saved state.
 
+Read `docs/threat-model.md` before you review or harden this code. A finding outside its
+release bar is recorded in the feature notes, not patched. When the same kind of fault
+returns, change the rule so that the unknown case is refused; do not add one more case
+to a list. The owner gave design decisions to the builder on 13 November 2026: decide,
+record the decision in `docs/product-direction.md`, and continue.
+
 Never run `setup-host --global` on the owner's machine without `--print`. It registers a
 server with the owner's hosts and, for Claude Code, changes `~/.claude/settings.json`.
 Tests move that folder with `CLAUDE_CONFIG_DIR`.

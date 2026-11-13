@@ -72,7 +72,9 @@ twinaatma self review
 `import` also reads a `CLAUDE.md`, an `AGENTS.md`, or a folder of agent memory files.
 It only reads the source. Each fact becomes an ordinary note; what the remembering
 policy recognises as a credential is withheld; importing the same file twice adds nothing.
-A source file whose own frontmatter marks it private is withheld whole. One run writes at
+A source file whose own frontmatter marks it private is withheld whole. A note with a
+privacy key (such as `privacy` or `sensitivity`) is private unless its value is
+`ordinary`, `public`, `shared`, `open`, `normal`, `none` or `low`; `doctor` counts them. One run writes at
 most 500 new notes and drafts at most 12 rules. It says what is left, and the same command
 continues from there. A rule you rejected is not drafted again. A folder with more than
 200 text files is refused unless you pass `--many-files`.

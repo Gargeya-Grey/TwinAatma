@@ -357,6 +357,28 @@ def _row_for(vault: Path, rel: str) -> tuple[dict[str, Any] | None, str | None]:
     return (matches[0] if matches else None), None
 
 
+_LIST_MARK_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+
+
+def line_key(line: str) -> str:
+    """One line of a draft as it is compared: without the list mark, with single spaces."""
+    return " ".join(_LIST_MARK_RE.sub("", line).split())
+
+
+def line_digest(line: str) -> str:
+    return hashlib.sha256(line_key(line).encode("utf-8")).hexdigest()
+
+
+def asked_lines(markdown: str) -> list[str]:
+    """A digest for each line of a draft body.
+
+    The signed row keeps them. So "was the person asked about this line" has an answer
+    that no file in the vault can change: the draft file can be edited or deleted
+    after the decision, and the answer stays.
+    """
+    return sorted({line_digest(line) for line in str(markdown or "").splitlines() if line_key(line)})
+
+
 def _set_status(vault: Path, rel: str, status: str, **extra: Any) -> None:
     rows, _ = read_ledger(vault)
     for row in rows:
@@ -1441,6 +1463,7 @@ The agent cannot approve its own proposal; that is the point.
                     "allow_destructive": bool(allow_destructive),
                     "base_digest": base_digest,
                     "body_sha256": body_sha,
+                    "asked_lines": asked_lines(proposed_markdown),
                     # The whole rendered file, so the approval screen cannot be made to
                     # show something other than what will be applied.
                     "file_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),

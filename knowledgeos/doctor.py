@@ -235,6 +235,35 @@ def _check_conflict_copies(vault: Path) -> None:
             print(f"            {rel}")
 
 
+def count_privacy_marked(vault: Path) -> int:
+    """How many notes their own metadata keeps away from assistants. Read-only."""
+    from knowledgeos.indexer import iter_markdown
+    from knowledgeos.remembering import marked_excluded
+
+    marked = 0
+    for path in iter_markdown(vault):
+        try:
+            marked += int(marked_excluded(path.read_text(encoding="utf-8", errors="replace")))
+        except OSError:
+            continue
+    return marked
+
+
+def _check_privacy_markers(vault: Path) -> None:
+    try:
+        marked = count_privacy_marked(vault)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not stop the doctor
+        print(f"  [WARNING] Could not count notes with a privacy marker: {exc}")
+        return
+    if not marked:
+        print("  [OK] No note carries a privacy marker.")
+        return
+    # Counted, not named: this output is often pasted into a chat.
+    print(f"  [OK] {marked} note(s) carry a privacy marker, so assistants are not offered them.")
+    print("       A note with a privacy key stays private unless its value is one of: ordinary,")
+    print("       public, shared, open, normal, none, low. Change the value to share a note.")
+
+
 def run_doctor(vault: Path) -> int:
     from knowledgeos.indexer import index_schema_problem, index_state
     from knowledgeos.vault_resolve import is_vault_root
@@ -492,6 +521,8 @@ def run_doctor(vault: Path) -> int:
 
     print("\n[*] Checking for sync conflict copies...")
     _check_conflict_copies(vault)
+    print("\n[*] Checking privacy markers...")
+    _check_privacy_markers(vault)
 
     print("\n[*] Checking toolkit assets...")
     try:

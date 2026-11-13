@@ -148,48 +148,37 @@ Open risks from the same chats, each seen once in a small sample:
 The cleaner long-term form of this is a Claude Code plugin, which the host installs
 and removes through its own command. It stays under "Later".
 
-### Open design questions after three reviews
+### Three design decisions after three reviews
 
 An independent reviewer read the 0.5 work three times on 13 November. Each time it
 said "do not ship": 7, then 15, then 11 findings. No review found a way to change the
 profile without the person's decision in a terminal. Three kinds of fault came back
-in all three reviews. A fourth patch of the same kind would not end them, so each is
-a design question for the owner. The defects are listed in
-`.agents/skills/verify-twinaatma/features/first-day.md`.
+in all three reviews. The cause was the same each time: the code listed what is
+forbidden, and each review found one more case that was not on the list. The owner
+gave the decisions to the builder on 13 November. Each rule now refuses the unknown
+case.
 
-**1. What marks a note private.** The policy lists the ways a note can say "private".
-Each review found a way that is not on the list; the last one is
-`privacy: [private] # x`.
+**1. A note with a privacy key is private unless its value says it is not.** The
+values that share a note are `ordinary`, `public`, `shared`, `open`, `normal`,
+`none` and `low`. Any other value, and any form the reader does not know, keeps the
+note private. A repeated key counts wherever it stands. `doctor` counts the marked
+notes and prints the list of sharing values. The cost: a note with an unusual value
+is not offered until the person changes the value.
 
-- Recommended: turn the rule around. A note that carries a privacy key is private
-  unless the value is one of a short list of words that mean "not private". An
-  unknown form withholds the note, and `doctor` names the notes withheld this way.
-- Other option: a full YAML reader. It needs a dependency or a large parser of our own.
+**2. A profile draft is not a note.** No route that returns notes returns a file
+from the draft folder, decided or not. A draft is reached on purpose: the list of
+drafts, or a read by its own path. `tests/test_draft_is_not_memory.py` asks every
+read tool, and a new tool fails that test until it is placed in its table. A map or
+index page is a starter page only under a name the toolkit writes (`_Index.md`,
+`_MOC_*.md`, the vault `README.md`). A map the person wrote is memory.
 
-**2. Whether an undecided profile draft is memory.** Each route that returns notes
-filters drafts and starter pages itself. Each review found a route without the
-filter; the last one is plain `memory_search`. The same filter also hides a map page
-the person wrote.
-
-- Recommended: a draft is not a note. Drafts stay out of the search index, and one
-  route lists the waiting drafts. A starter page is known by a mark that `init`
-  writes, not by its type, so a person's own map is memory.
-- Other option: drafts stay searchable everywhere and each row says "undecided
-  draft". The suite required this for the startup context until 13 November.
-
-**3. What import defends against.** Import checks paths to keep vault files out of
-its source, and reads files in the vault to know which rules it already asked about.
-Each review found a way around a check: a link, a swapped file, an edited proposal.
-
-- Recommended: state the threat. The person imports files they chose; the checks
-  stop an accident, not a second program that changes files during the run (such a
-  program can read the vault directly). Then read each source through one open
-  handle, name every skipped file, and record "this rule was asked" in the signed
-  record outside the vault. This adds a field to that record.
-- Other option: for 0.5, import one file at a time and track rules only against
-  the profile and the waiting drafts.
-
-One review round is left. It is best spent on the result of these three decisions.
+**3. Import defends against an accident, and the signed record remembers what was
+asked.** [The threat model](threat-model.md) states what the product defends
+against. Import reads each file through one open handle and names every file it
+skips. Each draft's lines are kept as digests in the signed record outside the
+vault, so a rejected rule stays rejected when its draft file is edited or deleted.
+This added the field `asked_lines` to that record; an older row without it is
+trusted only while its draft file is unchanged.
 
 ## Speed at 10,000 notes is deferred, on purpose
 
@@ -236,7 +225,6 @@ optional semantic recall.
 
 ## Decisions that stay with the owner
 
-- The three open design questions above. They block the first release to testers.
 - Inviting the first three to five outside testers (scorecard row 0).
 - Publishing to a package index (it claims the name for good).
 - Announcing the project.

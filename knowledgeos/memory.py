@@ -330,6 +330,7 @@ class MemoryAPI:
         supports it.
         """
         from knowledgeos.parser import split_frontmatter
+        from knowledgeos.search import is_undecided_draft
 
         needle = (query or "").strip().lower()
         out: list[dict[str, Any]] = []
@@ -340,6 +341,10 @@ class MemoryAPI:
             for row in rows:
                 try:
                     path = self._resolve(str(row.get("path", "")))
+                    # A profile draft is a claim about the person that they have not
+                    # decided. It is never returned as a note, by any route.
+                    if is_undecided_draft(path.relative_to(self.vault).as_posix()):
+                        continue
                     text = policy.read(path, historical=False)
                     if text is None:
                         continue
