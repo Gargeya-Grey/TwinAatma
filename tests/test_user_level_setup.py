@@ -67,7 +67,8 @@ class UserLevelSetup(TempVaultCase):
         self.assertIn("codex mcp remove knowledgeos", message)
 
     def test_a_script_wrapper_is_not_started_on_windows(self):
-        with mock.patch.object(host_setup.os, "name", "nt"):
+        # Not `os.name`: that is the name for the whole process, and paths stop working.
+        with mock.patch.object(host_setup, "_on_windows", return_value=True):
             done, message, ran = self.install("claude-code", program="C:/npm/claude.cmd")
         self.assertFalse(done)
         self.assertEqual(ran.calls, [])

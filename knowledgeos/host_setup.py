@@ -288,11 +288,16 @@ def user_command(host: str, vault: Path, transport: str = "stdio") -> list[str]:
             "knowledgeos", "--", *launch]
 
 
+def _on_windows() -> bool:
+    """One place to ask, so a test changes this answer and not the name of the system."""
+    return os.name == "nt"
+
+
 def _shell_line(argv: list[str]) -> str:
     import shlex
     import subprocess
 
-    return subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
+    return subprocess.list2cmdline(argv) if _on_windows() else shlex.join(argv)
 
 
 def install_user(host: str, vault: Path, transport: str = "stdio", *,
@@ -316,7 +321,7 @@ def install_user(host: str, vault: Path, transport: str = "stdio", *,
     program = resolve(argv[0])
     if program is None:
         return False, f"`{argv[0]}` was not found on PATH. Install {host}, then run:\n  {line}"
-    if os.name == "nt" and Path(program).suffix.lower() != ".exe":
+    if _on_windows() and Path(program).suffix.lower() != ".exe":
         # A .cmd or .bat wrapper re-parses its arguments through cmd.exe.
         return False, f"`{argv[0]}` is a script wrapper on this machine. Run this yourself:\n  {line}"
     try:
