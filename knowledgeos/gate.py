@@ -1353,7 +1353,9 @@ def propose(
     safe_section = SAFE_NAME_RE.sub("", section_key).strip().replace(" ", "_") or "section"
     path = proposals_dir / f"{now.strftime('%Y%m%d-%H%M%S')}-{safe_section}-{proposal_id[-8:]}.md"
 
-    title = _one_line(summary)[:120] or f"Self proposal — {section_key}"
+    from knowledgeos.remembering import metadata_text
+
+    title = metadata_text(_one_line(summary)[:120]) or f"Self proposal — {section_key}"
     body_sha = hashlib.sha256(proposed_markdown.strip().encode("utf-8")).hexdigest()
     # The rationale is free text the agent chooses, with real newlines. Left verbatim it
     # could contain a line reading `proposal_mode: append`, and every reader that scanned

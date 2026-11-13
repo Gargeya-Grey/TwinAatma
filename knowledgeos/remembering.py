@@ -384,117 +384,409 @@ def _pattern_reason(text):
     return _uncached_pattern_reason(text)
 
 
-# The privacy rule fails closed. A note that carries one of these keys is private unless
-# every value is a word from the short list that means "not private". A value this code
-# cannot read (a new spelling, a YAML form it does not know) withholds the note. The
-# list of words that mean "private" was the other way round, and each review found a
-# spelling that was not on it.
+# The privacy rule fails closed, twice.
+#
+# 1. A note that carries a privacy key is private unless every value is a word from the
+#    short list that means "not private".
+# 2. A note is shared only when its whole metadata block is understood. The reader below
+#    takes a small grammar apart: plain `key: value` lines, lists, nested blocks and text
+#    values. In a block of that grammar every key is known exactly, at every depth. A
+#    block in any other form (a `{...}` mapping, a tag, an anchor, a `? key`, an escaped
+#    key) is not searched for a privacy key. It keeps the note private.
+#
+# Five reviews found a spelling of a privacy key that an earlier reader did not see. Each
+# earlier reader looked for the key in text that it did not parse. This one refuses the
+# text it does not parse. `tests/test_privacy_yaml_oracle.py` changes blocks at random and
+# compares the answer with a full YAML parser.
 _PRIVACY_KEYS = {"privacy", "memory_privacy", "sensitivity", "memory_policy"}
 _FLAG_KEYS = {"sensitive", "third_party_sensitive", "do_not_remember"}
 _OPEN_LABELS = {"", "ordinary", "public", "shared", "open", "normal", "none", "low",
                 "false", "no", "off", "0", "null", "~"}
-_YAML_COMMENT = re.compile(r"\s+#.*$")
 _FLAG_NOT_SET = {"", "false", "no", "off", "0", "null", "none", "~"}
-# The metadata block as the policy reads it: leading blank lines are allowed, `...` ends
-# it too, and a block with no end runs to the end of the text.
-_METADATA_BLOCK = re.compile(
-    r"\A\ufeff?\s*---[ \t]*\r?\n(.*?)(?:\r?\n(?:---|\.\.\.)[ \t]*(?:\r?\n|\Z)|\Z)", re.S)
+_BLOCK_OPENING = re.compile(r"\A﻿?\s*---[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n)")
+_BLOCK_CLOSING = re.compile(r"(?:---|\.\.\.)(?:[ \t].*)?\Z")
+_KEY_END = re.compile(r":(?=\s|\Z)")
+_YAML_COMMENT = re.compile(r"(?:\A|\s)#.*\Z", re.S)
+_DASH = re.compile(r"-(?:\s|\Z)")
+_ODD_CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85  ﻿]")
+_KEY_STARTS = frozenset("-?:,[]{}#&*!|>'\"%@`")
+_TEXT = object()        # a text value: its words are not read, and it holds no key
+_MANY_LINES = object()  # a value written over several lines
+
+
+class _NotUnderstood(Exception):
+    """The metadata block has a form this reader does not take apart."""
+
+
+class _Mapping(list):
+    """The ``(key, value)`` pairs of one mapping, in the order written."""
 
 
 def _metadata_key(raw) -> str:
-    """A key as it is compared: no quotes, no case, `-` and spaces as `_`."""
-    return re.sub(r"[\s\-]+", "_", str(raw).strip().strip("\"'").strip().casefold())
+    """A key as it is compared: no quotes, no case; spaces, `-` and `_` are one `_`."""
+    return "_".join(part for part in re.split(r"[\s\-_]+", str(raw).strip().strip("\"'").casefold()) if part)
 
 
-def _labels(value) -> list:
-    """Every label in a privacy value. `[a, b] # note` is a list too."""
-    if isinstance(value, (list, tuple, set)):
-        return [label for item in value for label in _labels(item)]
-    value = _plain_scalar(value)
-    if isinstance(value, str) and value.startswith("[") and value.endswith("]"):
-        return [_plain_scalar(part) for part in value[1:-1].split(",")]
-    return [value]
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _no_content(line: str) -> bool:
+    stripped = line.strip()
+    return not stripped or stripped.startswith("#")
+
+
+def _metadata_lines(text: str):
+    """``(lines, closed)`` of the first metadata block, or ``None`` when the text has none."""
+    opening = _BLOCK_OPENING.match(text)
+    if not opening:
+        return None
+    lines = re.split(r"\r\n|\r|\n", text[opening.end():])
+    for number, line in enumerate(lines):
+        if _BLOCK_CLOSING.match(line):
+            return lines[:number], True
+    return lines, False
+
+
+class _BlockReader:
+    """Reads a block mapping line by line. A line outside the grammar raises."""
+
+    def __init__(self, lines: list[str]):
+        self.lines = lines
+        self.at = 0
+
+    def peek(self):
+        """The next line that holds something, or ``None``."""
+        while self.at < len(self.lines) and _no_content(self.lines[self.at]):
+            self.at += 1
+        return self.lines[self.at] if self.at < len(self.lines) else None
+
+    def take_text_below(self, parent: int) -> bool:
+        """Pass the lines of a text value of a key at column ``parent``.
+
+        After a value has started as text, a deeper line is more of that text or an
+        error to a full parser. It is never a key.
+        """
+        taken = False
+        while self.at < len(self.lines):
+            line = self.lines[self.at]
+            if line.strip() and _indent(line) <= parent:
+                break
+            taken = taken or bool(line.strip())
+            self.at += 1
+        return taken
+
+    def mapping(self, column: int, first: tuple | None = None) -> _Mapping:
+        pairs = _Mapping()
+        if first is not None:
+            pairs.append((first[0], self.value(first[1], column)))
+        while True:
+            line = self.peek()
+            if line is None or _indent(line) < column:
+                return pairs
+            if _indent(line) > column:
+                raise _NotUnderstood("a line stands deeper than its neighbours")
+            key, rest = _key_line(line[column:])
+            self.at += 1
+            pairs.append((key, self.value(rest, column)))
+
+    def sequence(self, column: int) -> list:
+        items: list = []
+        while True:
+            line = self.peek()
+            if line is None or _indent(line) != column or not _DASH.match(line[column:]):
+                if line is not None and _indent(line) > column:
+                    raise _NotUnderstood("a line stands deeper than the list it follows")
+                return items
+            content = line[column + 1:]
+            lead = content[:len(content) - len(content.lstrip(" \t"))]
+            if "\t" in lead:
+                raise _NotUnderstood("a tab after a list dash")
+            inner = column + 1 + len(lead)
+            content = content.strip()
+            self.at += 1
+            if not content or content.startswith("#"):
+                following = self.peek()
+                if following is not None and _indent(following) > column:
+                    raise _NotUnderstood("a list item that starts on the next line")
+                items.append(None)
+            elif re.match(r"[-?](?:\s|\Z)", content):
+                raise _NotUnderstood("a list or a `?` key inside a list item")
+            else:
+                entry = _entry(content)
+                items.append(self.mapping(inner, first=entry) if entry else self.value(content, column))
+
+    def value(self, rest: str, parent: int):
+        """The value of a key at column ``parent``; ``rest`` is the text after its colon."""
+        rest = rest.strip()
+        if not rest or rest.startswith("#"):
+            line = self.peek()
+            if line is None:
+                return None
+            depth = _indent(line)
+            content = line[depth:]
+            if depth >= parent and _DASH.match(content):
+                return self.sequence(depth)
+            if depth <= parent:
+                return None
+            if _entry(content):
+                return self.mapping(depth)
+            if content[0] in _KEY_STARTS:
+                raise _NotUnderstood("a value on the next line that is not plain text")
+            self.take_text_below(parent)
+            return _MANY_LINES
+        first = rest[0]
+        if first in "&!" or re.match(r"[-?](?:\s|\Z)", rest):
+            raise _NotUnderstood("a value with a tag, an anchor or a nested start")
+        if first in "[{":
+            items = _flow_value(rest)
+            line = self.peek()
+            if line is not None and _indent(line) > parent:
+                raise _NotUnderstood("a `[` or `{` value over several lines")
+            return items
+        if first in "\"'":
+            closed = _quoted(rest)
+            more = self.take_text_below(parent)
+            return _MANY_LINES if more or closed is None else closed
+        if first in "|>":
+            self.take_text_below(parent)
+            return _TEXT
+        more = self.take_text_below(parent)
+        return _MANY_LINES if more else _YAML_COMMENT.sub("", rest).strip()
+
+
+def _entry(content: str):
+    """``(key, rest)`` when the content is a `key: rest` entry, ``None`` when it holds no key.
+
+    Content that holds a key separator and is not a plain entry raises. It is never passed
+    on as text: a full parser can read a key where this reader sees words.
+    """
+    first = content[:1]
+    if first in "\"'":
+        return None if _quoted(content) is not None else _key_line(content)
+    if first in "[{|>":
+        return None
+    return _key_line(content) if _KEY_END.search(_YAML_COMMENT.sub("", content)) else None
+
+
+def _key_line(content: str) -> tuple[str, str]:
+    """``(key, rest)`` of a `key: rest` line. Any other line raises."""
+    first = content[:1]
+    if first in "\"'":
+        end = content.find(first, 1)
+        key = content[1:end]
+        after = content[end + 1:].lstrip(" ")
+        if end < 0 or "\\" in key or after[:1] == first or not _KEY_END.match(after):
+            raise _NotUnderstood("a quoted key that is not plain")
+        return key, after[1:]
+    if not first or first in _KEY_STARTS:
+        raise _NotUnderstood("a line that does not start with a plain key")
+    found = _KEY_END.search(content)
+    if not found:
+        raise _NotUnderstood("a line with no key")
+    key = content[:found.start()].rstrip()
+    if not key or re.search(r"\s#", key) or key == "<<":
+        raise _NotUnderstood("a key that is not plain")
+    return key, content[found.end():]
+
+
+def _quoted(rest: str):
+    """The text of a quoted value that ends on its line, or ``None`` when it does not."""
+    quote = rest[0]
+    at = 1
+    while at < len(rest):
+        char = rest[at]
+        if quote == '"' and char == "\\":
+            at += 2
+            continue
+        if char == quote:
+            if quote == "'" and rest[at + 1:at + 2] == "'":
+                at += 2
+                continue
+            tail = rest[at + 1:]
+            return None if tail.strip() and not re.match(r"\s+#", tail) else rest[1:at]
+        at += 1
+    return None
+
+
+def _simple_list(rest: str):
+    """The labels of `[a, "b", 'c']` on one line, or ``None`` when it is not that form."""
+    at, items, size = 1, [], len(rest)
+    while True:
+        while at < size and rest[at] == " ":
+            at += 1
+        if at >= size:
+            return None
+        char = rest[at]
+        if char == "]":
+            tail = rest[at + 1:]
+            return None if tail.strip() and not re.match(r"\s+#", tail) else items
+        if char in "\"'":
+            end = at + 1
+            while end < size and rest[end] != char:
+                end += 2 if (char == '"' and rest[end] == "\\") else 1
+            if end >= size or (char == "'" and rest[end + 1:end + 2] == "'"):
+                return None
+            items.append(rest[at + 1:end])
+            at = end + 1
+        else:
+            end = at
+            while end < size and rest[end] not in ",]":
+                end += 1
+            label = rest[at:end].strip()
+            if (not label or label[0] in "&*!|>%@`?#" or _DASH.match(label)
+                    or _KEY_END.search(label) or re.search(r"\s#", label)
+                    or any(mark in label for mark in "{}[\"'")):
+                return None
+            items.append(label)
+            at = end
+        while at < size and rest[at] == " ":
+            at += 1
+        if at < size and rest[at] == ",":
+            at += 1
+        elif at >= size or rest[at] != "]":
+            return None
+
+
+def _flow_value(rest: str):
+    """A value that starts with `[` or `{`.
+
+    A plain one-line list gives its labels. A bracket that closes on its line with no
+    colon and no quote inside holds no key that has a value, so it is text. Any other
+    form raises.
+    """
+    if rest[0] == "[":
+        items = _simple_list(rest)
+        if items is not None:
+            return items
+    depth = 0
+    for at, char in enumerate(rest):
+        if char in "\"'":
+            break
+        depth += char in "[{"
+        depth -= char in "]}"
+        if depth == 0:
+            if ":" in rest[:at + 1] or rest[at + 1:].lstrip(" ").startswith(":"):
+                break
+            return _TEXT
+    raise _NotUnderstood("a `[` or `{` value that is not a plain list")
 
 
 def _label_is_open(label) -> bool:
     if label is None or label is False:
         return True
-    return isinstance(label, str) and label.casefold() in _OPEN_LABELS
+    return isinstance(label, str) and label.isascii() and label.strip().lower() in _OPEN_LABELS
+
+
+def _flag_is_set(value) -> bool:
+    """True unless a privacy flag clearly says no. Text nobody can read as a no is a yes."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, str):
+        return not (value.isascii() and value.strip().lower() in _FLAG_NOT_SET)
+    return True
+
+
+def _every_label(value, test) -> bool:
+    labels = value if isinstance(value, (list, tuple, set)) and not isinstance(value, _Mapping) else [value]
+    return all((label is None or isinstance(label, (str, bool))) and test(label) for label in labels)
+
+
+def _pair_excludes(raw_key, value) -> bool:
+    key = _metadata_key(raw_key)
+    if key in _PRIVACY_KEYS:
+        return not _every_label(value, _label_is_open)
+    if key in _FLAG_KEYS:
+        return not _every_label(value, lambda label: not _flag_is_set(label))
+    return False
+
+
+def _tree_excludes(node) -> bool:
+    """True when a key at any depth says "do not remember"."""
+    if isinstance(node, _Mapping):
+        return any(_pair_excludes(key, value) or _tree_excludes(value) for key, value in node)
+    if isinstance(node, list):
+        return any(_tree_excludes(item) for item in node)
+    return False
+
+
+def _plain_scalar(value):
+    """A value as one label: no trailing comment, no quotes."""
+    if not isinstance(value, str):
+        return value
+    return _YAML_COMMENT.sub("", value).strip().strip("\"'").strip()
 
 
 def _pairs_exclude(pairs) -> bool:
-    """True when one ``(key, value)`` pair marks the text as not to be remembered."""
+    """The question for a mapping that is already parsed (a tool argument, a result row)."""
     for raw_key, value in pairs:
-        key = _metadata_key(raw_key)
-        if key in _PRIVACY_KEYS and not all(_label_is_open(label) for label in _labels(value)):
-            return True
-        if key in _FLAG_KEYS and any(_flag_is_set(item) for item in
-                                     (value if isinstance(value, (list, tuple, set)) else [value])):
+        if isinstance(value, str):
+            value = _plain_scalar(value)
+            if value.startswith("[") and value.endswith("]"):
+                value = [_plain_scalar(part) for part in value[1:-1].split(",")]
+        elif isinstance(value, dict):
+            value = _Mapping(value.items())
+        elif isinstance(value, (list, tuple, set)):
+            value = [_plain_scalar(item) if isinstance(item, str) else item for item in value]
+        elif value is not None and not isinstance(value, bool):
+            value = str(value)
+        if _pair_excludes(raw_key, value):
             return True
     return False
 
 
-_KEY_WORD = (r"(?:memory[\s_\-]*privacy|memory[\s_\-]*policy|privacy|sensitivity|"
-             r"third[\s_\-]*party[\s_\-]*sensitive|do[\s_\-]*not[\s_\-]*remember|sensitive)")
-# A privacy key inside a `{...}` mapping, or written as a `? key`. This reader does not
-# take those forms apart, so the note stays private whatever the value says.
-_KEY_IN_BRACES = re.compile(r"[\"']?\b" + _KEY_WORD + r"[\"']?\s*:", re.I)
-_KEY_AS_QUESTION = re.compile(r"^\s*(?:-\s*)*\?\s*[\"']?" + _KEY_WORD + r"\b", re.I)
+def _flat_reading_excludes(lines: list[str]) -> bool:
+    """True when the toolkit's own flat parser reads a privacy key that does not share.
 
-
-def _indent(line: str) -> int:
-    return len(line) - len(line.lstrip(" \t"))
-
-
-def _is_marker_key(raw) -> bool:
-    return _metadata_key(raw) in _PRIVACY_KEYS | _FLAG_KEYS
-
-
-def _block_excludes(text: str) -> bool:
-    """True when the metadata block of ``text`` says "do not remember".
-
-    The block is read line by line, and it is not parsed into one mapping, because a
-    mapping keeps one value for a key that appears twice and loses a key at a depth the
-    caller did not expect. A privacy key counts wherever it stands: at the top, under
-    another key, in a list item. Where the value is in a form this reader does not take
-    apart (a nested mapping, a value on the next line, a `{...}` mapping, a `? key`),
-    the answer is yes. `tests/test_privacy_yaml_oracle.py` compares this reader with a
-    full YAML parser on generated documents.
+    That parser makes the `frontmatter` mapping the tools return, and it reads each
+    `key: value` line alone. A note it would call private is private here too, even
+    where the line stands inside a text value. So the two readings never disagree.
     """
-    match = _METADATA_BLOCK.match(text)
-    if not match:
-        return False
-    lines = [line for line in match.group(1).splitlines()
-             if line.strip() and not line.strip().startswith("#")]
-    pairs: list[tuple[str, list[str]]] = []
-    depth = 0
-    for index, line in enumerate(lines):
-        in_braces = depth > 0 or "{" in line
-        depth = max(0, depth + line.count("{") - line.count("}"))
-        if (in_braces and _KEY_IN_BRACES.search(line)) or _KEY_AS_QUESTION.match(line):
-            return True
-        entry = line.strip()
-        if entry.startswith("-"):
-            # A list item belongs to the key above it. It can also hold a key of its own.
-            entry = entry.lstrip("- \t")
-            if pairs:
-                pairs[-1][1].append(entry)
-        if ":" not in entry:
-            continue
-        key, _, rest = entry.partition(":")
-        if _is_marker_key(key) and not _plain_scalar(rest):
-            following = lines[index + 1] if index + 1 < len(lines) else ""
-            if following and _indent(following) > _indent(line) and not following.strip().startswith("-"):
-                return True
-        pairs.append((key, [rest]))
-    return _pairs_exclude(pairs)
+    from knowledgeos.parser import parse_frontmatter_block
+
+    return _pairs_exclude(parse_frontmatter_block("\n".join(lines)).items())
+
+
+def metadata_reason(text: str = ""):
+    """Why the text's own metadata keeps it private, or ``None`` when it does not.
+
+    ``"marked"``: a privacy key says so. ``"not_understood"``: the block has a form this
+    reader does not take apart, so nobody can say that it holds no privacy key.
+    """
+    block = _metadata_lines(str(text or ""))
+    if block is None:
+        return None
+    lines, _closed = block
+    if _flat_reading_excludes(lines):
+        return "marked"
+    content = [line for line in lines if not _no_content(line)]
+    if not content:
+        return None
+    if _ODD_CONTROL.search("\n".join(lines)) or any(
+            "\t" in line[:len(line) - len(line.lstrip(" \t"))] for line in lines):
+        return "not_understood"
+    first = content[0].strip()
+    if first[0] not in _KEY_STARTS and not _KEY_END.search(first):
+        # The block starts as prose: a rule line and words, not metadata.
+        return None
+    reader = _BlockReader(lines)
+    try:
+        start = reader.peek()
+        if _DASH.match(start.strip()):
+            raise _NotUnderstood("a list where the keys should be")
+        pairs = reader.mapping(_indent(start))
+        if reader.peek() is not None:
+            raise _NotUnderstood("a line that stands outside the block")
+    except _NotUnderstood:
+        return "not_understood"
+    return "marked" if _tree_excludes(pairs) else None
 
 
 def marked_excluded(text: str = "", metadata=None) -> bool:
-    """True when the text's own metadata, or the given mapping, says "do not remember"."""
+    """True when the text's own metadata, or the given mapping, keeps it private."""
     if isinstance(metadata, dict) and _pairs_exclude(metadata.items()):
         return True
-    return _block_excludes(str(text or ""))
+    return metadata_reason(text) is not None
 
 
 def metadata_excludes(metadata) -> bool:
@@ -502,19 +794,20 @@ def metadata_excludes(metadata) -> bool:
     return isinstance(metadata, dict) and _pairs_exclude(metadata.items())
 
 
-def _plain_scalar(value):
-    """A frontmatter value without a trailing YAML comment or quotes."""
-    if not isinstance(value, str):
-        return value
-    return _YAML_COMMENT.sub("", value).strip().strip("\"'").strip()
+def metadata_text(value) -> str:
+    """One line of text as a metadata value that this reader understands.
 
-
-def _flag_is_set(value) -> bool:
-    """True unless a privacy flag clearly says no. Text nobody can read as a no is a yes."""
-    value = _plain_scalar(value)
-    if isinstance(value, str):
-        return value.casefold() not in _FLAG_NOT_SET
-    return bool(value)
+    A writer of note metadata passes a title through here. Text that would read as a
+    list, a tag or an anchor is put in quotes, so the note that is written can be read.
+    """
+    text = " ".join(str(value or "").split())
+    try:
+        understood = _BlockReader([]).value(text, 0) if text else ""
+    except _NotUnderstood:
+        understood = None
+    if isinstance(understood, str) or understood is _TEXT:
+        return text
+    return "'" + text.replace("'", "''") + "'"
 
 
 class PolicyError(ValueError):
@@ -906,12 +1199,34 @@ class RememberingPolicy:
                     "reviewed_sha256": record["sha256"]}
         return {"memory_status": "current"}
 
+    def admit(self, value):
+        """Refuse a value on its way in.
+
+        A string that comes in is a whole text: a note to save, a patch, a question. It
+        is judged with its own metadata block, so a private note that is pasted in is
+        not saved as an ordinary one.
+        """
+        if isinstance(value, str):
+            if value in self.state["forgotten"] or self.text_reason(value):
+                raise PolicyError(EXCLUDED)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                self.admit(item)
+        elif isinstance(value, dict):
+            if metadata_excludes(value):
+                raise PolicyError(EXCLUDED)
+            for key, item in value.items():
+                self.admit(key)
+                self.admit(item)
+        return value
+
     def scrub(self, value):
         if isinstance(value, str):
             # A string on its way out is a piece of a note: a body, a snippet, a title.
             # Whether the note is private was decided when the whole file was read, from
             # its own metadata block. A body that begins with a YAML example is not a
-            # metadata block, so only the content checks apply here.
+            # metadata block, so only the content checks apply here. A value on its way
+            # in goes through `admit`.
             if value in self.state["forgotten"] or self.content_reason(value):
                 return "[Excluded by remembering policy]"
             return value

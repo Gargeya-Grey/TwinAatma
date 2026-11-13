@@ -34,6 +34,17 @@ EXCLUDED = {
     "initem": "notes:\n  - privacy: private",
     "question": "? privacy\n: private",
     "flagnested": "do_not_remember:\n  value: true",
+    # The forms a fifth review found. The reader does not look for a key in these; it
+    # refuses a block that it does not take apart.
+    "escaped": '"priv\\u0061cy": private',
+    "tagged": "!!str privacy: private",
+    "anchored": "&key privacy: private",
+    "alias": "first: &key privacy\n*key: private",
+    "folded": "privacy: public\n  private",
+    "quotedfold": 'privacy: "public\n  private"',
+    "flagfold": "do_not_remember: false\n  yes",
+    "dashkey": "list:\n  - -privacy: private",
+    "bracekey": "meta: [privacy: private]",
 }
 KEPT = {
     "public": "privacy: public # shared with the team",
@@ -44,6 +55,16 @@ KEPT = {
     "low": "sensitivity: low",
     "blank": "privacy:",
     "notprivate": "privacy: no",
+    "falseword": "privacy: false",
+    "zero": "privacy: 0",
+    "nullword": "privacy: null",
+    # Ordinary metadata in the forms that note tools write stays shared.
+    "itemlist": "aliases:\n  - Copper\n  - 'Field: one'",
+    "wrapped": "summary: a long text\n  that goes on",
+    "bracket": "summary: [urgent] call the bank",
+    "braces": "summary: Guide to {privacy:private} settings",
+    "nestedblock": "relations:\n  - type: supersedes\n    target: Old plan\n  - type: extends",
+    "textblock": "summary: |\n  a text block\n  with two lines",
 }
 
 
@@ -91,10 +112,15 @@ class MarkedNotes(TempVaultCase):
         from knowledgeos import doctor
 
         self.assertEqual(doctor.count_privacy_marked(self.vault), len(EXCLUDED))
+        marked, not_read = doctor.count_withheld_by_metadata(self.vault)
+        self.assertEqual(marked + not_read, len(EXCLUDED))
+        self.assertGreater(marked, 0)
+        self.assertGreater(not_read, 0)
         said = io.StringIO()
         with contextlib.redirect_stdout(said):
             doctor._check_privacy_markers(self.vault)
-        self.assertIn(f"{len(EXCLUDED)} note(s) carry a privacy marker", said.getvalue())
+        self.assertIn(f"{marked} note(s) carry a privacy marker", said.getvalue())
+        self.assertIn(f"{not_read} note(s) have metadata in a form the toolkit does not read", said.getvalue())
         self.assertIn("ordinary", said.getvalue())
         self.assertNotIn("Inbox/", said.getvalue())
         self.assertNotIn("opperfield", said.getvalue())
@@ -113,6 +139,10 @@ class MarkedNotes(TempVaultCase):
 
 
 WHOLE_BLOCKS = {
+    "escapedkey": 'title: Larkspur escapedkey\ntype: note\n"priv\\u0061cy": private',
+    "taggedkey": "title: Larkspur taggedkey\ntype: note\n!!str privacy: private",
+    "foldedvalue": "title: Larkspur foldedvalue\ntype: note\nprivacy: public\n  private",
+    "aliaskey": "title: Larkspur aliaskey\ntype: note\nfirst: &key privacy\n*key: private",
     "flow": "{title: Larkspur flow, type: note, privacy: private}",
     "flowlines": "{\n  title: Larkspur flowlines,\n  type: note,\n  \"privacy\": private\n}",
     "flowflag": "{title: Larkspur flowflag, type: note, do_not_remember: true}",
@@ -208,10 +238,105 @@ class ANoteAboutPrivacy(TempVaultCase):
         started = dispatch(MemoryAPI(self.vault), "memory_session_start", {"task_hint": "harbour guide marker"})
         self.assertIn("Concepts/Marker-guide.md", repr(started["context"]["relevant"]))
 
+    def test_a_private_note_that_is_pasted_in_is_not_saved_as_an_ordinary_note(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        pasted = "---\nprivacy: private\n---\nThe topaz beacon secret is hidden here.\n"
+        self.write("Concepts/Target.md", "---\ntitle: Target\ntype: concept\n---\n\nA plain target note.\n")
+        for tool, arguments in (
+                ("memory_capture", {"title": "Copy of marked note", "content": pasted}),
+                ("memory_capture", {"title": "Copy with a form nobody reads",
+                                    "content": pasted.replace("privacy: private", "{privacy: private}")}),
+                ("memory_propose_note_update", {"path_or_id": "Concepts/Target.md", "summary": "Add this",
+                                                "patch_markdown": pasted})):
+            with self.subTest(tool=tool, title=arguments.get("title")):
+                answer = dispatch(MemoryAPI(self.vault), tool, arguments)
+                self.assertIsNot(answer.get("ok"), True, answer)
+                self.assertNotIn("topaz", repr(answer))
+        # The command line and the importer call the method, not the tool.
+        try:
+            direct = self.api().capture("Copy by the method", pasted)
+        except Exception as error:  # noqa: BLE001 - a refusal may be raised or returned
+            direct = {"refused": repr(error)}
+        self.assertIsNot(direct.get("ok"), True, direct)
+        try:
+            direct = self.api().propose_note_update("Concepts/Target.md", "Add this", pasted)
+        except Exception as error:  # noqa: BLE001
+            direct = {"refused": repr(error)}
+        self.assertIsNot(direct.get("ok"), True, direct)
+        from knowledgeos.indexer import iter_markdown
+
+        saved = [path.name for path in iter_markdown(self.vault)
+                 if "topaz beacon" in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(saved, [])
+
     def test_a_mapping_on_its_way_out_is_still_judged(self):
         policy = RememberingPolicy(self.vault)
         self.assertEqual(policy.scrub({"privacy": "private", "body": "x"}), "[Excluded by remembering policy]")
         self.assertEqual(policy.scrub({"privacy": "ordinary", "body": "x"}), {"privacy": "ordinary", "body": "x"})
+
+
+class WhatTheToolkitWrites(TempVaultCase):
+    """The reader understands each file the toolkit writes. A saved fact can be read back."""
+
+    TITLES = {
+        "indigo": "Guide to {privacy:private} settings",
+        "walnut": "[urgent] call: the bank",
+        "saffron": '"Quoted" title',
+        "pewter": "&co news",
+        "cobalt": "!important: read this",
+        "russet": "- a dash at the start",
+        "ochre": "? a question mark at the start",
+        "umber": "*star* note",
+        "sienna": "{x: y}",
+        "mauve": "privacy: private",
+        "teal": "It's a 'quoted' thing",
+        "fawn": "[a, b]",
+        "ebony": "> an arrow, | a bar and # a hash",
+    }
+
+    def test_a_fact_saved_under_any_title_is_read_back(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        for word, title in self.TITLES.items():
+            with self.subTest(title=title):
+                saved = dispatch(MemoryAPI(self.vault), "memory_capture",
+                                 {"title": title, "content": f"The {word} otter fact is Wednesday."})
+                self.assertIs(saved.get("ok"), True, saved)
+                note = dispatch(MemoryAPI(self.vault), "memory_get_note", {"path_or_id": saved["path"]})
+                self.assertIn(f"{word} otter", str(note.get("body")), note)
+                found = dispatch(MemoryAPI(self.vault), "memory_search", {"query": f"{word} otter Wednesday"})
+                self.assertIn(saved["path"], repr(found))
+
+    def test_every_file_the_toolkit_writes_is_understood(self):
+        from knowledgeos.indexer import iter_markdown
+        from knowledgeos.memory import MemoryAPI, dispatch
+        from knowledgeos.remembering import metadata_reason
+
+        api = MemoryAPI(self.vault)
+        for word, title in self.TITLES.items():
+            dispatch(api, "memory_capture", {"title": title, "content": f"The {word} otter fact is Wednesday."})
+            dispatch(api, "memory_propose_self_update",
+                     {"summary": title, "section": "heuristics", "proposed_markdown": f"* Keeps the {word} rule.",
+                      "rationale": "Said so.", "mode": "append"})
+        started = dispatch(api, "memory_session_start", {"task_hint": "otter facts"})
+        dispatch(api, "memory_session_end", {"session_id": started.get("session_id"),
+                                             "summary": "[done] talked: about {otters} & more"})
+        files = iter_markdown(self.vault)
+        self.assertGreater(len(files), 2 * len(self.TITLES))
+        withheld = {path.relative_to(self.vault).as_posix(): metadata_reason(path.read_text(encoding="utf-8"))
+                    for path in files}
+        self.assertEqual({path: reason for path, reason in withheld.items() if reason}, {})
+
+    def test_the_starter_templates_are_understood(self):
+        from knowledgeos.remembering import metadata_reason
+        from support import ROOT
+
+        templates = sorted((ROOT / "Templates").glob("*.md"))
+        self.assertTrue(templates)
+        for path in templates:
+            with self.subTest(template=path.name):
+                self.assertIsNone(metadata_reason(path.read_text(encoding="utf-8")))
 
 
 if __name__ == "__main__":

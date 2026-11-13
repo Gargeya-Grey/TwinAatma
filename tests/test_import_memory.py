@@ -160,7 +160,11 @@ class ImportMemory(ImportCase):
                              ("j.md", "privacy:\n  level: private"),
                              ("k.md", "{title: Route, privacy: private}"),
                              ("l.md", "meta:\n  privacy: private"),
-                             ("m.md", "title: Route\nnotes: [{privacy: private}]")):
+                             ("m.md", "title: Route\nnotes: [{privacy: private}]"),
+                             ("n.md", '"priv\\u0061cy": private'),
+                             ("o.md", "privacy: public\n  private"),
+                             ("p.md", "!!str privacy: private"),
+                             ("q.md", "first: &key privacy\n*key: private")):
             with self.subTest(marker=marker):
                 before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
                 source = self.source(name, f"---\n{marker}\n---\n\n- Prefers the copper meadow route to work.\n"
@@ -383,9 +387,29 @@ class ImportMemory(ImportCase):
         settled = importer.import_path(self.api(), source, "Rules")
         self.assertEqual((settled["rule_like_lines"], settled["drafts_not_checked"]), (0, 0), settled)
         shutil.rmtree(self.root / "state")
-        again = importer.import_path(self.api(), source, "Rules")
-        self.assertGreaterEqual(again["drafts_not_checked"], 1, again)
-        self.assertTrue(any("not in the signed record" in problem for problem in again["problems"]), again)
+        plain = self.source("fact.md", "The heron bridge opens in May.\n")
+        for name, run in (("a dry run", lambda: importer.import_path(self.api(), source, "Rules", dry_run=True)),
+                          ("a file with no rule", lambda: importer.import_path(self.api(), plain, "Facts")),
+                          ("the rule again", lambda: importer.import_path(self.api(), source, "Rules"))):
+            with self.subTest(run=name):
+                again = run()
+                self.assertGreaterEqual(again["drafts_not_checked"], 1, again)
+                self.assertTrue(any("not in the signed record" in problem for problem in again["problems"]),
+                                again)
+
+    def test_a_link_that_leads_nowhere_is_named(self):
+        import shutil
+
+        gone = self.root / "gone"
+        gone.mkdir()
+        folder = self.root / "exports" / "with-dead-link"
+        folder.mkdir(parents=True)
+        (folder / "one.md").write_text("The first plan is to ship in June.\n", encoding="utf-8")
+        self.linked_folder(folder / "dead", gone)
+        shutil.rmtree(gone)
+        report = importer.import_path(self.api(), folder, "Dead link", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (1, 1), report)
+        self.assertTrue(any("skipped: dead" in problem for problem in report["problems"]), report["problems"])
 
     def test_two_labels_that_look_alike_are_two_sources(self):
         source = self.source("same.md", "The shared plan is to ship in June.\n")

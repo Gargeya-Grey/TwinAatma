@@ -160,14 +160,18 @@ case.
 
 **1. A note with a privacy key is private unless its value says it is not.** The
 values that share a note are `ordinary`, `public`, `shared`, `open`, `normal`,
-`none` and `low`. Any other value, and any form the reader does not know, keeps the
+`none` and `low`, and a plain no: `false`, `no`, `off`, `0`, `null` or an empty
+value. Any other value, and any form the reader does not know, keeps the
 note private. A repeated key counts wherever it stands. `doctor` counts the marked
 notes and prints the list of sharing values. The cost: a note with an unusual value
 is not offered until the person changes the value.
 
-**2. A profile draft is not a note.** No route that returns notes returns a file
-from the draft folder, decided or not. A draft is reached on purpose: the list of
-drafts, or a read by its own path. `tests/test_draft_is_not_memory.py` asks every
+**2. A profile draft is not a note.** No route returns a file from the draft folder
+as a note: not as a search hit, a neighbour, a start for neighbours, a decision, a
+timeline row or context. Decided or not. The text of a draft is reached on purpose:
+the list of drafts, or a read by its own path. Three status answers name the path of
+a draft that waits, because the person must be told that it waits:
+`memory_ops_status`, the weekly report, and the freshness reason of a session start. `tests/test_draft_is_not_memory.py` asks every
 read tool, and a new tool fails that test until it is placed in its table. A map or
 index page is a starter page only under a name the toolkit writes (`_Index.md`,
 `_MOC_*.md`, the vault `README.md`). A map the person wrote is memory.
@@ -189,25 +193,43 @@ called done: a privacy marker written below another key or inside braces, and
 lists of cases written by the same hand that wrote the code. So each rule now has a
 check that does not depend on that hand.
 
-**4. The privacy reader is checked against a full YAML parser.** The toolkit reads
-metadata without a YAML library. `tests/test_privacy_yaml_oracle.py` writes several
-thousand metadata blocks with a real YAML library, in each style that library has, and
-requires the reader to keep a note private whenever the parsed block holds a privacy
-key that does not say "share". The library is a tool of the test only. A marker inside
-braces, below another key, or in a form the reader does not take apart keeps the note
-private.
+**4. A note is shared only when its whole metadata block is read.** The toolkit reads
+metadata without a YAML library. The first form of this decision looked for a privacy
+key in each form somebody had thought of, and a fifth review found eight more forms
+(an escaped key, a tag, an anchor, a value over two lines). So the rule was turned
+round. The reader takes a small grammar apart: plain `key: value` lines, lists, nested
+blocks and text values. A block in any other form is not searched. It keeps the note
+private, and `doctor` counts such notes apart from the marked ones. The toolkit's own
+flat parser is asked too, so the two readings never disagree.
+`tests/test_privacy_yaml_oracle.py` changes known blocks at random and compares the
+answer with a real YAML library. It found a fault in the earlier reader in about one
+block of seventy, and none in this one in 1.4 million blocks. The library is a tool of
+the test only. The cost: a note whose metadata uses `{...}`, a tag or an anchor is not
+offered until it is written as plain lines, and a metadata line that reads
+`privacy: private` keeps the note private even inside a text value.
+
+A text that comes in is judged with its own metadata block. A private note that is
+pasted into `memory_capture` or `memory_propose_note_update` is refused. A text on its
+way out is a piece of a note that was already judged, so a body that begins with a
+metadata example is an ordinary body. The toolkit writes a title that would not be
+read (one that starts with `&`, `!` or `- `) in quotes, so a saved fact can be read
+back under any title.
 
 **5. One list of notes.** A route that reads files itself starts from
 `indexer.iter_notes`, which leaves drafts out. The same test file names each remaining
 caller of the plain file list and the reason it may see a draft. A new caller fails
 that test until it is named.
 
-**6. Import does not enter a linked folder.** A Windows junction is a link. Import
-walks the folder itself, skips each linked file and folder, and names it.
+**6. Import does not enter a linked folder while it walks.** A Windows junction is a
+link. Import walks the folder itself, skips each linked file and folder below the
+source, and names it, a link that leads nowhere too. The source path itself is the
+person's choice: a path that is a link is refused, and a path that passes through a
+linked folder higher up is read, because a home folder often is one.
 
 **7. A draft that is not in the signed record is reported.** When the state folder is
-lost, import counts each draft it cannot check and says that a rule the person already
-decided can be drafted again. The profile still needs a decision in a terminal.
+lost, every import run, a dry run too, counts each draft it cannot check and says that
+a rule the person already decided can be drafted again. The profile still needs a
+decision in a terminal.
 
 **8. The settings merge refuses `-0`.** A rewrite would turn it into `0`.
 
@@ -221,7 +243,11 @@ Recorded and not repaired, with the reason:
 
 A fifth review is over the limit of four that the owner's general rules set. The
 builder ran one narrow check of these repairs because two leaks reached the fourth
-review. Its result is in the handoff.
+review. It said "do not ship": the privacy reader still missed eight forms, and a
+change to the outgoing check let a pasted private note be saved. Decision 4 above is
+the answer to both. Its lesser findings (a draft as a start for neighbours, a lost
+state reported only for a rule import, a link that leads nowhere, the list of sharing
+values in this document) are repaired in the same change.
 
 ## Speed at 10,000 notes is deferred, on purpose
 

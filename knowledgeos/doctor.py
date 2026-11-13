@@ -235,33 +235,50 @@ def _check_conflict_copies(vault: Path) -> None:
             print(f"            {rel}")
 
 
-def count_privacy_marked(vault: Path) -> int:
-    """How many notes their own metadata keeps away from assistants. Read-only."""
-    from knowledgeos.indexer import iter_markdown
-    from knowledgeos.remembering import marked_excluded
+def count_withheld_by_metadata(vault: Path) -> tuple[int, int]:
+    """``(marked, not_read)``: the notes their own metadata keeps away from assistants.
 
-    marked = 0
+    ``marked`` notes carry a privacy key. ``not_read`` notes have a metadata block in a
+    form the toolkit does not take apart, so they stay private too. Read-only.
+    """
+    from knowledgeos.indexer import iter_markdown
+    from knowledgeos.remembering import metadata_reason
+
+    marked = not_read = 0
     for path in iter_markdown(vault):
         try:
-            marked += int(marked_excluded(path.read_text(encoding="utf-8", errors="replace")))
+            reason = metadata_reason(path.read_text(encoding="utf-8", errors="replace"))
         except OSError:
             continue
-    return marked
+        marked += reason == "marked"
+        not_read += reason == "not_understood"
+    return marked, not_read
+
+
+def count_privacy_marked(vault: Path) -> int:
+    """How many notes their own metadata keeps away from assistants. Read-only."""
+    return sum(count_withheld_by_metadata(vault))
 
 
 def _check_privacy_markers(vault: Path) -> None:
     try:
-        marked = count_privacy_marked(vault)
+        marked, not_read = count_withheld_by_metadata(vault)
     except Exception as exc:  # noqa: BLE001 - a diagnostic must not stop the doctor
         print(f"  [WARNING] Could not count notes with a privacy marker: {exc}")
         return
-    if not marked:
+    if not marked and not not_read:
         print("  [OK] No note carries a privacy marker.")
         return
     # Counted, not named: this output is often pasted into a chat.
-    print(f"  [OK] {marked} note(s) carry a privacy marker, so assistants are not offered them.")
-    print("       A note with a privacy key stays private unless its value is one of: ordinary,")
-    print("       public, shared, open, normal, none, low. Change the value to share a note.")
+    if marked:
+        print(f"  [OK] {marked} note(s) carry a privacy marker, so assistants are not offered them.")
+        print("       A note with a privacy key stays private unless its value is one of: ordinary,")
+        print("       public, shared, open, normal, none, low, or a plain no (false, no, off, 0,")
+        print("       null, empty). Change the value to share a note.")
+    if not_read:
+        print(f"  [OK] {not_read} note(s) have metadata in a form the toolkit does not read, so")
+        print("       assistants are not offered them either. Write the metadata as plain")
+        print("       `key: value` lines, without `{...}`, tags or anchors, to share such a note.")
 
 
 def run_doctor(vault: Path) -> int:

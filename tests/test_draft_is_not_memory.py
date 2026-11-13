@@ -33,6 +33,10 @@ RETURNS_NOTES = {
     "memory_self_get": [{}],
     "memory_ops_status": [{}],
 }
+# The rule is about notes and text: no tool above returns a draft as a note, and none
+# returns its text. Three status answers name the path of a draft that waits, because the
+# person must be told that it waits: `memory_ops_status`, the weekly report, and the
+# freshness reason of a session start.
 # These reach a draft on purpose: the list of drafts, and a read by the draft's own path.
 REACHES_A_DRAFT = {"memory_list_self_proposals", "memory_get_note"}
 # These write, or decide a draft. They are not read routes.
@@ -137,6 +141,18 @@ class EveryReadTool(DraftCase):
 
     def test_the_real_note_is_still_found(self):
         self.assertIn("Quokka-ledger-owner", self.ask("memory_search", {"query": WORDS}))
+
+
+class ADraftIsNoStart(DraftCase):
+    def test_neighbours_of_a_draft_are_not_given(self):
+        name = self.draft.rsplit("/", 1)[-1]
+        for start in (self.draft, name, name[:-3], self.draft.upper()):
+            for hops in (1, 2):
+                with self.subTest(start=start, hops=hops):
+                    arguments = {"path_or_id": start, "hops": hops}
+                    answer = dispatch(MemoryAPI(self.vault), "memory_related", arguments)
+                    self.assertIn("error", answer, answer)
+                    self.assertEqual(self.draft_rows("memory_related", arguments), [])
 
 
 class EveryReport(DraftCase):

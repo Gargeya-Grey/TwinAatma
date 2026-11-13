@@ -212,10 +212,9 @@ def _plain_files(folder: Path, problems: list[str]) -> list[Path]:
         for entry in entries:
             shown = entry.relative_to(folder).as_posix()
             if _is_link(entry):
-                if entry.is_dir():
-                    problems.append(f"is a linked folder, skipped: {shown}")
-                elif entry.suffix.lower() in SOURCE_SUFFIXES:
-                    problems.append(f"is a link, skipped: {shown}")
+                # A link that leads nowhere is neither a folder nor a file. It is named too.
+                kind = "is a linked folder" if entry.is_dir() else "is a link"
+                problems.append(f"{kind}, skipped: {shown}")
             elif entry.is_dir():
                 pending.append(entry)
             elif entry.is_file():
@@ -303,9 +302,6 @@ def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None, int]:
         if row.get("status") == "draft" and waiting is None and asked & wanted:
             waiting = str(row.get("proposal") or "")
         held |= asked
-    # A draft file with no signed row (the signing state was lost, or the vault was
-    # restored without it) is history nobody can check. It is counted, never trusted.
-    unchecked += len(gate.untrusted_proposals(api.vault, api.proposals_dir))
     return [rule for rule in rules if gate.line_digest(rule) not in held], waiting, unchecked
 
 
@@ -323,6 +319,12 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
                               "withheld_by_policy": 0, "failed": 0, "left_for_next_run": 0,
                               "paths": [], "profile_draft": None, "rules_left_for_next_run": 0,
                               "drafts_not_checked": 0, "dry_run": dry_run}
+    # A draft file with no signed row (the signing state was lost, or the vault was
+    # restored without it) is history nobody can check. It is counted on every run, a
+    # dry run and a run with no rule too. It is never trusted.
+    from knowledgeos import gate
+
+    report["drafts_not_checked"] = len(gate.untrusted_proposals(api.vault, api.proposals_dir))
     rules: list[str] = []
     seen: set[str] = set()
     for item in items:
@@ -368,7 +370,8 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
     rules = list(dict.fromkeys(rules))
     report["rule_like_lines"] = len(rules)
     if rules and draft_profile and not dry_run:
-        rules, waiting, report["drafts_not_checked"] = _undrafted(api, rules)
+        rules, waiting, unchecked = _undrafted(api, rules)
+        report["drafts_not_checked"] += unchecked
         report["rule_like_lines"] = min(len(rules), MAX_RULES)
         report["rules_left_for_next_run"] = max(0, len(rules) - MAX_RULES)
         rules = rules[:MAX_RULES]
@@ -413,6 +416,7 @@ def import_path(api: Any, path: Path, label: str | None = None, *, dry_run: bool
     if report["drafts_not_checked"]:
         problems.append(f"{report['drafts_not_checked']} earlier profile draft(s) could not be checked: the "
                         "draft file is gone or was changed, or the draft is not in the signed record. A rule "
-                        "you already decided can be drafted again; reject it again in `twinaatma self review`")
+                        "you already decided can be drafted again; reject it again in `twinaatma self review`. "
+                        "You can delete a draft file that is not in the signed record")
     report["problems"] = problems
     return report

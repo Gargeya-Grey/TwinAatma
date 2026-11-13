@@ -21,7 +21,7 @@ from typing import Any
 from knowledgeos.database import connect_database
 from knowledgeos.parser import parse_frontmatter, split_frontmatter
 from knowledgeos.self_model import SECTION_ALIASES, load_self
-from knowledgeos.remembering import RememberingPolicy, PolicyError, EXCLUDED, policy_boundary
+from knowledgeos.remembering import RememberingPolicy, PolicyError, EXCLUDED, metadata_text, policy_boundary
 
 SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._\- ]+")
 PROPOSAL_MODES = {"replace", "append"}
@@ -522,8 +522,11 @@ class MemoryAPI:
     @_memory_boundary
     def related(self, path_or_id: str, hops: int = 1, limit: int = 30) -> dict[str, Any]:
         hops = 1 if hops not in (1, 2) else hops
+        from knowledgeos.search import is_undecided_draft
+
         note_path = self._resolve_note(path_or_id)
-        if not note_path:
+        if not note_path or is_undecided_draft(self._rel(note_path)):
+            # A profile draft is not a note, so it has no neighbours and is no start.
             return {"error": f"note not found: {path_or_id}"}
         if RememberingPolicy(self.vault).read(note_path, historical=False) is None:
             raise PolicyError(EXCLUDED)
@@ -824,6 +827,9 @@ class MemoryAPI:
 
         with RememberingPolicy(self.vault).lock() as policy:
             policy.require_text("\n".join([title, content, *(tags or [])]), {"privacy": privacy})
+            # The content alone too: with the title in front, a metadata block at the top
+            # of pasted text is no longer at the top.
+            policy.require_text(content)
             with file_lock(state_dir(self.vault) / "capture.lock", timeout=120):
                 return self._capture(title, content, tags, request_id)
 
@@ -867,7 +873,7 @@ class MemoryAPI:
         clean_title = _one_line(title) or "capture"
         text = f"""---
 type: research
-title: {clean_title}
+title: {metadata_text(clean_title)}
 description: Inbox capture — {clean_title}
 schema: knowledgeos-v0.2
 status: draft
@@ -995,8 +1001,12 @@ project:
         target = self._resolve_note(path_or_id)
         if not target:
             return {"error": f"note not found: {path_or_id}"}
-        if RememberingPolicy(self.vault).read(target, historical=False) is None:
+        policy = RememberingPolicy(self.vault)
+        if policy.read(target, historical=False) is None:
             raise PolicyError(EXCLUDED)
+        # The text that comes in is judged here too, not only at the tool boundary: a
+        # private note that is pasted in is not saved inside an ordinary one.
+        policy.admit([summary, patch_markdown])
         try:
             inbox = self._writable_dir(self.inbox)
             inbox.mkdir(parents=True, exist_ok=True)
@@ -2241,7 +2251,7 @@ def dispatch(api: MemoryAPI, name: str, arguments: dict[str, Any] | None = None)
         with api._request_scope():
             policy = RememberingPolicy(api.vault)
             if name not in {"memory_forget", "memory_supersede"}:
-                policy.release(args)
+                policy.admit(args)
             result = mapping[name]()
             return RememberingPolicy(api.vault).release(result)
     except PolicyError as exc:
