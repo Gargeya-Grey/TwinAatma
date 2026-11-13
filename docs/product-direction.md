@@ -109,8 +109,9 @@ after 0.5.
 
 ### State after the 0.5 work
 
-The column "13 Nov" above is the state before the work. This is the state after it,
-on branch `product/one-journey`. Each line says how it was checked.
+The column "13 Nov" above is the state before the work. This is the state after it.
+The work was merged into `main` on 13 November (`1ca581f`). Each line says how it was
+checked.
 
 | # | State | How it was checked |
 |---|---|---|
@@ -372,8 +373,8 @@ Each step below needs the step under it.
 |---|---|---|---|
 | 7. Announce | Step 6, and a package on the package index | No package is published. The name `twinaatma` on the index is not checked. | Owner |
 | 6. Three to five people finish day one | Step 5, a one-page test script, a place for reports | The script is `docs/try-it.md`; reports come as issues on the repository. Only Claude Code was run for real; Codex, Cursor and Claude Desktop were not. | Owner invites |
-| 5. A stranger can install what was built | `pip install git+https://github.com/Gargeya-Grey/TwinAatma` installs `main`, so the work must be on `main` | The commits of this branch are not pushed (41 on 13 November). They change code, tests, skills, documents, scripts and two workflows; no note folders. | Owner says yes to the push |
-| 4. The pull request is green | The suite on Linux and Windows, Python 3.11 and 3.13 | The suite ran only on Windows with 3.13. The check of the privacy reader was skipped in CI, because CI had no YAML parser; CI now installs one. | Builder |
+| 5. A stranger can install what was built | `pip install git+https://github.com/Gargeya-Grey/TwinAatma` installs `main`, so the work must be on `main` | Done on 13 November. Both pull requests are merged and `main` holds the work (`1ca581f`). A fresh install from the repository made a vault, passed `doctor`, saved a fact without a title and found it with a plain question. No model chat was run on that install. | Done |
+| 4. The pull request is green | The suite on Linux and Windows, Python 3.11 and 3.13 | Done on 13 November: 20 of 20 checks passed on the merged commit, on Linux and Windows with Python 3.11 and 3.13. CI installs a YAML parser, so the check of the privacy reader runs there. | Done |
 | 3. The last commit is proved here | Full suite, the first-day driver, one fresh install with a real chat | Done on 13 November: see row 6 above and "What real Claude Code chats showed". | Builder |
 
 What this order changes:
