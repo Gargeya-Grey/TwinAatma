@@ -81,4 +81,12 @@ class LockRepairTests(TempVaultCase):
                 self.assertEqual(json.loads(target.read_bytes())['pid'],os.getpid())
         self.assertFalse(target.exists())
 
+    def test_a_live_process_is_not_dead_and_an_ended_one_is(self):
+        from knowledgeos.locking import _dead
+        self.assertFalse(_dead(os.getpid()))
+        child = subprocess.Popen([sys.executable, '-c', 'pass'], stdin=subprocess.DEVNULL)
+        child.wait(timeout=30)
+        # The open handle keeps the process number from being used again on Windows.
+        self.assertTrue(_dead(child.pid))
+
 if __name__=='__main__': unittest.main()

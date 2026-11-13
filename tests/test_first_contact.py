@@ -279,6 +279,23 @@ class AWaitingProfileChange(FirstContactCase):
         self.assertIn("twinaatma self review", status)
         self.assertNotIn("yes/no", status)
 
+    def test_no_text_for_the_assistant_says_that_a_chat_answer_decides_it(self):
+        """Every text the toolkit hands to an assistant: starter files, hooks, the tool list, a chat start."""
+        from knowledgeos import autopilot, memory
+        texts = {"compact instructions": autopilot.AGENT_INSTRUCTIONS_COMPACT,
+                 "tool list": json.dumps(memory.TOOL_SPECS, ensure_ascii=False, default=str),
+                 "init result": json.dumps(self.init_result, ensure_ascii=False, default=str),
+                 "chat start": json.dumps(self.api().session_start("plan the week"), ensure_ascii=False, default=str)}
+        for path in sorted(self.vault.rglob("*")):
+            if path.is_file() and path.suffix in {".md", ".mdc", ".py", ".json"}:
+                texts[path.relative_to(self.vault).as_posix()] = path.read_text(encoding="utf-8", errors="replace")
+        self.assertIn(".cursor/rules/knowledgeos-twin.mdc", texts)
+        self.assertIn("AGENTS.md", texts)
+        for name, text in texts.items():
+            for words in ("yes/no", "Want me to remember", "accept/reject"):
+                with self.subTest(text=name, words=words):
+                    self.assertNotIn(words, text)
+
     def test_one_reminder_covers_every_waiting_change(self):
         self.draft("Answer in short sentences")
         self.draft("Name the source of a fact", section="values")

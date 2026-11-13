@@ -8,7 +8,8 @@ The human finished **one successful setup**. After that:
 
 - They must **never** think about operating the twin (no scripts, cadences, indexes, schema).
 - **You** keep TwinAatma **up to date, relevant, and self-evolving**.
-- They only enjoy grounded help — plus rare soft yes/no when remembering a preference.
+- They only enjoy grounded help — plus a rare short question, and one command of their own
+  (`twinaatma self review`) when a change to their profile waits.
 
 Speak about “remembering” / “your preferences” to the user. Prefer **not** to say “TwinAatma” or “KnowledgeOS” unless they ask how the system works.
 
@@ -19,7 +20,7 @@ Speak about “remembering” / “your preferences” to the user. Prefer **not
 | **First tool every meaningful chat** | `memory_session_start` (`task_hint` = user goal; retain returned `session_id`) | Autopilot: refresh index if stale, load Self + memory, weekly drift proposal, `soft_prompt` |
 | Need past context | `memory_search` / `memory_get_note` / `memory_related` / `memory_decisions` | Magical relevance |
 | User shares something worth keeping | `memory_capture` | Persist without asking them to "save" |
-| Stable preference / rule changes | `memory_propose_self_update` → soft yes/no | Self never silent-writes |
+| Stable preference / rule changes | `memory_propose_self_update`, then say once that a change waits | Self never silent-writes |
 | User agrees | They run `twinaatma self approve <file>` themselves (`twinaatma self review` decides every waiting draft in one sitting) | Apply — see below |
 | Profile still empty (`onboarding` is set) | Ask the soft prompt once, capture what they share, draft their rules | First chat becomes useful |
 | They have memory in another assistant | They run `twinaatma import <file>` themselves | Day one starts with what they already told another assistant |
@@ -47,9 +48,10 @@ You may **propose** changes to who the user is. You can never **apply** them.
 
 ## Soft prompts (not chores)
 
-If `soft_prompt` is set, ask **once**, in human language:
+If `soft_prompt` is set, say it **once**, in human language. A yes in chat decides nothing
+about the profile; only `twinaatma self review` does.
 
-- Good: “Want me to remember that preference?”
+- Good: “One change to your profile waits. Run `twinaatma self review` in a terminal when you want to decide.”
 - Good: “Quick check — how did X turn out?”
 - Bad: “Update your digital twin / run scripts / open Self-Proposals.”
 
@@ -95,6 +97,7 @@ the check first, so that it fails on the fault, then the code.
 | A text that holds a marked metadata block, at its start or further down, is not saved as an ordinary note | `tests/test_privacy_metadata_comments.py`, class `ANoteAboutPrivacy` |
 | Import does not enter a link while it walks, and names what it skips or withholds | `tests/test_import_memory.py` |
 | A document names only tools that exist | `tests/test_docs.py` |
+| No text for the assistant says that an answer in chat decides a profile change | `tests/test_first_contact.py`, class `AWaitingProfileChange`: every starter file, hook, tool description and chat start is read |
 | A seeded defect of the mutation check names code that exists | `tests/test_mutation_targets.py`; after a rewrite of such code, run `python tests/mutation_check.py` |
 
 Never run `setup-host --global` on the owner's machine without `--print`. It registers a

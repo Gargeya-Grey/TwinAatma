@@ -9,16 +9,16 @@ Setup is done. The human must never operate the twin toolkit. You keep it alive.
 
 ## Every chat
 
-1. **First tool call:** `memory_session_start` with `task_hint` = their goal (autopilot refreshes index, loads Self, may set `soft_prompt`).
+1. **First tool call:** `memory_session_start` with `task_hint` = their goal (autopilot refreshes index, loads Self, may set `soft_prompt`; say it once).
 2. Advise using Self heuristics/values/anti-goals/active bets.
 3. Prefer `memory_search` / `memory_decisions` / `memory_get_note` over guessing.
 4. `memory_capture` important ideas without asking them to save.
-5. Preference changes → `memory_propose_self_update` → one soft question (“Want me to remember that?”) → accept/reject.
+5. Preference changes → `memory_propose_self_update`, then say once that a change to their profile waits. Only they apply it, with `twinaatma self review` in their own terminal; a yes in chat decides nothing.
 6. When useful work ends → `memory_session_end` with a short summary.
 
 ## Never
 
-- Ask them to run python/scripts/rebuild/validate/MOCs.
+- Ask them to run python/scripts/rebuild/validate/MOCs. The one command they run is `twinaatma self review`.
 - Silently edit `People/Self.md`.
 - Spam product jargon (“TwinAatma”, “KnowledgeOS”, “MCP”, “Self proposal”) unless they ask.
 

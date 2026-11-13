@@ -19,35 +19,22 @@ Memory remains local by default, external writes require scope, and maintenance 
 
 Share information, export a selected project, update links or schema, or restore a backup. Optional Notion publishing is separate from memory operation.
 
-## Driving it with isolated CLI copies and file comparisons
+## What checks it
 
-Preconditions: inspect every source-only script's vault resolution. Use a complete task-owned checkout copy with synthetic notes. Never run destructive export probes in the working vault.
+Preconditions: read how each source-only script finds its vault. Use a complete task-owned checkout copy with synthetic notes. Never run an export probe in the working vault. Run one suite with `python -B -m unittest discover -s tests -p <file>`.
 
-- Note census. Enumerate indexable notes read-only. Require tool instructions, caches, fixtures, and nested synthetic identities to be excluded. Focused census regressions now cover .agents, work, outputs, tests and AGENTS.md; the driver also stores its fixtures beneath .knowledgeos.
-- Scope inventory. Include installed CLI, MCP tools, host hooks, source-only scripts, Notion integrations, and local evidence. Record the entry points that are absent from the installed package.
-- Export overlap. Seed synthetic identity and source notes. In the isolated copy, invoke `scripts/export_bundle.py --paths Concepts --out People` and an output equal to selected source. Require refusal and byte-for-byte preservation. Also test a sibling path with the same string prefix, an existing unrelated output, and linked output directories.
-- Successful export. Select synthetic notes with links and attachments. Export to a fresh owned destination. Verify source invariance, bundle manifest, exact selected content, link behavior, and whether dependencies are included or explicitly omitted.
-- Derived writers. Exercise supported intelligence/dashboard writers in the full synthetic copy. Seed linked parents, linked or hardlinked outputs where permitted, and edited existing reports. Require protected sentinels and edits to survive with explicit failures.
-- Hook installation. In a task-owned Git repository, seed an existing pre-commit hook and test custom `core.hooksPath`. Require preservation or an explicit refusal.
-- Validation. Run `twinaatma validate --vault <fixture>` on known-good and deliberately malformed notes. Require precise broken-link, ambiguous-link, status, date, tag, and duplicate-ID diagnostics.
-- Maintenance. Run the documented dry-run and write entry points for ID assignment, link refactoring, and map updates in the isolated copy. Compare all affected files and exit codes. Require Self, proposal evidence, and fenced examples to remain unchanged. Inject a failed write and require recoverable originals.
-- Privacy. Use synthetic credentials and sensitive records under the agreed retention policy. Inspect persisted notes, context, transcripts, bundles, and publish selections. Keep external credentials absent for local verification. Real external publishing requires the user's explicit authorization and a concrete reviewed selection.
-- Approved-policy source checks. Exercise direct API, CLI and real MCP process refusals for titles, bodies, tags, task hints and summaries. Require sanitized protocol errors, source hashes unchanged, stale/forged cache exclusion, explicit forgetting across duplicates/restarts/retries, historical correction attribution, and merged concurrent exclusions. Fail closed on malformed, duplicate-key, hardlinked or linked state. Inject a failed ledger publication and retain the failed observation before checking recovery.
-- Inventory control. `iter_markdown` remains the raw source inventory for validation and maintenance; `iter_memory_markdown` applies narrower personal-memory admission. An invalid excluded source must still produce validation errors, with private diagnostic values redacted. Preserve ordinary direct text bytes and existing export collision refusals.
-- Restore. Restore a bundle to a new fixture. Verify source hashes and documented omissions. Test pending approvals according to the portability feature rather than copying untrusted keys into a working identity.
+- Remembering policy. `tests/test_privacy_policy.py`, `tests/test_privacy_authority.py`, `tests/test_privacy_normalization.py`, `tests/test_policy_snapshot.py`, `tests/test_refresh_policy_boundary.py` and `tests/test_pattern_reuse.py`: admission and refusal of marked and credential-like content; forgetting across exact copies; historical corrections; signed policy state that refuses a changed mirror or a missing key.
+- The privacy reader. `tests/test_privacy_metadata_comments.py` and `tests/test_privacy_yaml_oracle.py` (random texts against a full YAML parser; needs PyYAML). See [the first day](first-day.md).
+- Sensitive relations and diagnostics. `tests/test_privacy_sensitive_relations.py` and `tests/test_privacy_diagnostics.py`: `self pending` and the drift report withhold an excluded source and fail closed when the policy state is unavailable.
+- Reads of a bound source. `tests/test_source_binding.py`: a path outside the vault, a hard link, a symbolic link and a replaced file are refused.
+- Note census. `tests/test_note_census_types.py`, `tests/test_template_census.py`, `tests/test_generated_census.py` and `tests/test_recall_repairs.py`: tool instructions, caches, fixtures and nested synthetic identities are not personal memory; a person's edit to a generated report is.
+- Export and maintenance. `tests/test_data_repairs.py` and `tests/test_id_maintenance.py`: export refuses an overlapping source, an existing output and a linked path, and a fresh bundle keeps its source and manifest; link and ID maintenance keep identity, proposals, fenced examples and mixed line endings, and a failed write keeps the whole note.
+- Generated writers. `tests/test_generated_writer_faults.py`: a failed commit keeps the original reports and a retry converges.
+- Validation. Classes `SchemaTests` and `VaultIntegrityTests` in `tests/test_core.py` and class `ValidatorRootGuideTests` in `tests/test_journey_gaps.py`.
+- Publishing. Class `NotionPublishingTests` in `tests/test_learning_repairs.py`: a dry run and an unselected note never call the transport. Real publishing needs the owner's explicit authorization and a reviewed selection.
+- Inventory control. `iter_markdown` is the raw source inventory for validation and maintenance; `iter_memory_markdown` applies the narrower personal-memory admission. An invalid excluded source must still give validation errors, with private values redacted.
 
-Use [the 44-case privacy source recipe](../references/source-privacy.md) for
-approved-policy provenance, signed state, admission, forgetting, historical
-corrections, diagnostics and guarded publishing. The independent `--privacy-report`
-adapter awards only the policy and two source outcomes; zero credential resolution
-and zero outbound transport attempts are required for the publishing refusals.
-
-Use [the source data-preservation recipe](../references/data-preservation.md) for
-repeatable complete-copy export, generated-writer, census and maintenance journeys.
-The maintenance driver has separate `maintenance`, `hooks` and `validation` choices.
-Each driver
-retains observable cases without assigning fixed-outcome credit itself. Combine its
-current report through the strict data adapter before updating the accepted score.
+Not checked by any script: hook installation in a real Git repository with a custom `core.hooksPath`, data operations from an installed package, and a restore of a bundle to a new machine. The driver for each was removed on 13 November 2026; the last commit that holds it is `69bec1e`.
 
 ## Gotchas
 

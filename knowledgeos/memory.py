@@ -2029,7 +2029,7 @@ TOOL_SPECS = [
         "description": (
             "REQUIRED first tool every meaningful chat. Autopilot breath: refreshes the "
             "search index if stale, loads Self + relevant memory, runs light weekly evolution, "
-            "returns soft_prompt (ask once in plain language). User must never manage this."
+            "returns soft_prompt (say it once in plain language). User must never manage this."
         ),
         "inputSchema": {
             "type": "object",
@@ -2060,7 +2060,7 @@ TOOL_SPECS = [
         "name": "memory_ops_status",
         "description": (
             "Agent hygiene report (pending outcomes, open Self proposals). "
-            "Do not dump on user — surface only needed yes/no questions."
+            "Do not dump on user — surface only what the person must decide."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

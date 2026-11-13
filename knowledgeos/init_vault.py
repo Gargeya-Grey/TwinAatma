@@ -547,7 +547,7 @@ Capture → Clarify → Connect → Decide → Execute → Record Outcome → Re
 2. Otherwise: talk to your agent — it will capture and propose Self updates
 
 ## Weekly (agent-initiated)
-Agents call `memory_ops_status` / session rituals. You only answer yes/no when asked.
+Agents call `memory_ops_status` / session rituals. You answer a short question when asked.
 """,
         ),
     )
@@ -588,7 +588,7 @@ vault, re-run `twinaatma setup-host --host cursor --write` from the new location
 
 ## Identity
 
-Edit [People/Self.md](People/Self.md) — or let the agent propose updates and say yes/no.
+Edit [People/Self.md](People/Self.md) — or let the agent draft a change, and decide it with `twinaatma self review`.
 
 Created: {today}
 """,
@@ -621,7 +621,7 @@ Assets/papers/
             f"cd {target}",
             "Wire MCP once: twinaatma setup-host --host cursor --write",
             "Open the vault in Cursor — hooks + AGENTS.md keep the twin autopilot alive",
-            "Chat normally — agents call memory_session_start; you only answer soft yes/no when asked",
+            "Chat normally — agents call memory_session_start; you answer a short question when asked",
         ],
     }
     if dry_run:

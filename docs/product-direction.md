@@ -2,7 +2,8 @@
 
 13 November 2026. This page says what TwinAatma is for, how progress is measured,
 and what is built next. It replaces the proof count as the steering measure.
-[Verification status](verification-status.md) keeps the proof record.
+The proof record of October is in the history of the repository
+(`docs/verification-status.md` at commit `69bec1e`).
 
 ## The promise
 
@@ -98,10 +99,10 @@ later chat without help.
 | 3 | Plain questions find the note | Share of plain-question cases where `memory_search` offers the expected note in its first 5 rows. A note that holds every word is in `ranked`. A note that holds only some words is in the separate `possibly_related` list, so a partial match is never presented as the answer. | 90% or more | 2 of 7 |
 | 4 | Works wherever the person chats | User-level setup, so memory loads in every project | Claude Code and Codex | 0 |
 | 5 | Clean first contact | Fresh vault: no starter page returned as relevant memory; no internal text in starter files | pass | fail |
-| 6 | Safety holds | Full regression suite and mutation check | green | see status page |
+| 6 | Safety holds | Full regression suite and mutation check | green | see the table below |
 
-Row 6 is a gate. A change that breaks it does not ship. The 54-outcome rubric stays
-as a release checklist, run once against a release candidate, not after every edit.
+Row 6 is a gate. A change that breaks it does not ship. The 54-outcome rubric is
+retired: see "The acceptance programme is removed" below.
 
 Rows 1 to 6 can all pass with no user. Row 0 cannot, and it decides what is built
 after 0.5.
@@ -309,6 +310,51 @@ were statements in documents. The text after decision 4 says what changed. The
 The builder did not run a seventh review. The random test now covers the place where
 the sixth review found its leak, and the next useful check is a person who is not the
 builder.
+
+### The acceptance programme is removed
+
+On 13 November the owner asked that tests which do not serve the product do not stay.
+The rule the builder applied: a test stays when it fails for a fault that a user or a
+caller of the toolkit can observe.
+
+The October programme did not meet that rule. It was 46 driver and grader files under
+the verification skill, 37 test files that tested those files, 16 reference documents,
+two workflows and two status pages. Its tests checked that a grader accepts or refuses
+an evidence file. Measured with line coverage: of the lines of the package that the
+suite runs, the 37 files alone ran 15, and 6 of those were not real product lines. The
+real ones (a refused setting in a Codex file, a refused entry in a project file, the
+vault named in the environment, the check for an ended process) now have four direct
+tests. Line coverage says that a line ran, not that a test checks it, and several
+tests failed in the measuring run, so the figure is an estimate. The likely cause of
+those failures is the long path of that checkout (see below); it was not confirmed.
+
+Removed: 104 files and about 35,400 lines. By area: verification scripts 22,329,
+their tests 7,684, one development fixture 2,425, documents 2,613, workflows 356.
+The package itself changed by 4 lines of wording. Kept from the programme: the
+first-day driver, and the recall evaluation with its three frozen fixtures and the
+test that guards it, because both drive the product and judge what a person would
+see. The evaluation passed on 13 November (`69bec1e`): 91 of 108 cases pass, 3 fail,
+14 do not apply; every critical source was offered (44 of 44).
+
+The suite went from 1,274 tests to 896. On the builder's Windows machine the 37 files
+took about 23 minutes of a run; the whole suite now takes about 15 minutes. After the
+removal: 896 tests pass and 21 are skipped, the scorecard reports 100.0, the
+first-day driver 37 of 37.
+
+One fact about the suite came out of this work. On Windows it must run from a short
+path. In a checkout whose path was 56 characters long, 54 tests in five files failed
+with a path error, because their fixtures lie deep under `work/gc-artifacts`. The
+same commit passed whole in a checkout at a 5-character path.
+
+What this costs. The 54-outcome count can no longer be computed from the tree. The
+journeys that only the programme drove have no check now: a host chat from an
+installed package, the speed budget at 10,000 notes, an upgrade from an older
+release, loss of signing state with an installed package, and a restore on a second
+machine. Each feature file of the verification skill names them as not checked. The
+last commit that holds the whole programme is `69bec1e`.
+
+Not done: the 67 remaining test files were not read one by one against the same
+rule. `tests/test_core.py` alone holds 201 tests.
 
 ## The path to a release, planned backwards
 
