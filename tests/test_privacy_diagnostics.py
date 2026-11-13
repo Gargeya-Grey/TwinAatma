@@ -2,9 +2,7 @@
 import contextlib
 import importlib.util
 import io
-import json
 import os
-from pathlib import Path
 import secrets
 import subprocess
 import sys
@@ -25,12 +23,6 @@ class PrivacyDiagnosticTests(TempVaultCase):
             if process.poll() is None:
                 process.kill()
                 process.communicate(timeout=10)
-        evidence = os.environ.get("TA_DIAGNOSTIC_TEST_EVIDENCE")
-        if evidence:
-            with Path(evidence).open("a", encoding="utf-8") as stream:
-                stream.write(json.dumps({"command": command, "pid": process.pid,
-                    "stopped": process.poll() is not None, "exit_code": process.returncode,
-                    "stdout": stdout, "stderr": stderr}) + "\n")
         return process.returncode, stdout, stderr
 
     def test_pending_omits_legacy_signed_sensitive_proposal_paths(self):

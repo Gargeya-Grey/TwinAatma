@@ -2060,7 +2060,7 @@ TOOL_SPECS = [
         "name": "memory_ops_status",
         "description": (
             "Agent hygiene report (pending outcomes, open Self proposals). "
-            "Do not dump on user — surface only needed yes/no questions."
+            "Do not dump on user — surface only what the person must decide."
         ),
         "inputSchema": {"type": "object", "properties": {}, "additionalProperties": False},
     },

@@ -14,27 +14,24 @@ The assistant can suggest identity changes. Only the owner applies a reviewed ch
 
 Ask what the assistant knows about you. Express a stable preference. Review a proposed change in your own terminal, or decline it. The memory tool that accepts Self updates intentionally refuses.
 
-## Driving it with MCP and owner evidence
+## What checks it
 
-Preconditions: use the helper's synthetic identity. Keep the real owner's Self file untouched.
+Preconditions: a synthetic identity. Keep the real owner's Self file untouched. Run one suite with `python -B -m unittest discover -s tests -p <file>`.
 
-- Proposal boundary. Run the core driver. Require an actual proposal, an MCP error on tool acceptance, recorded rejection, and unchanged Self hash.
-- Cold start. Initialize with a name alone and ask about the person's ranked values. Require unknown or clearly marked examples, not attributed template values.
-- Section agreement. In a synthetic fixture, rename visible section headings while retaining canonical `kos:section` markers. Call `memory_self_get` and `memory_session_start`. Require every known section to remain visible and proposals to target the same section. Test duplicate markers as an invalid document.
-- Authentic preview. In a synthetic fixture, create a proposal through the public proposer, edit its body or displayed summary, and call the read-only preview. Require refusal before a diff is shown and exact preservation of the edited input and Self bytes. Restore the original proposal and require a valid preview. A stale target section, unsafe identity file or malformed patch also refuses. Preview tests never establish owner approval.
-- Integrity. Use existing identity corpus scenarios and additional fixture cases for edited proposals, stale Self bases, invalid signatures, replay, links, and loss of off-vault state. Verify refusal against before/after hashes, not error text alone.
-- Integrity journey. Run `python -B .agents/skills/verify-twinaatma/scripts/integrity.py --output work/gc-artifacts/.knowledgeos/integrity`. It freezes 20 cases (tamper, stale base, replay, invalid approval state, MCP accept, path and link refusals), drives MCP over stdio and `self approve` in a hidden real console, and never answers a prompt: a case that reaches the prompt fails and its exact child is stopped. Score it with `acceptance.py --extension-report integrity=<report.json>`; the `integrity_adapter.py` grader recomputes every verdict from retained bytes. It proves refusal before the prompt only; it never exercises a successful owner approval.
-- Human approval. The owner independently runs `twinaatma self approve <proposal>` in their own terminal after reading the diff. Use decline and approval cases on synthetic identity. Capture the actual displayed diff, owner decision, receipt, and resulting bytes. An agent never supplies the answer or runs this approval command. Leave this gate NOT CHECKED until independent owner evidence exists.
+- Proposal boundary. `first_day.py` and classes `SelfGateTests`, `GateLeverageTests` and `GateBoundaryTests` in `tests/test_core.py`: a real proposal, an error when a tool tries to accept it, a recorded rejection, and an unchanged Self hash.
+- Cold start. `tests/test_setup_repairs.py`: setup with a name alone leaves every preference unknown.
+- Section agreement. `tests/test_setup_repairs.py`: renamed section headings with their `kos:section` markers stay visible and writable; duplicate markers are an invalid document.
+- Authentic preview. `tests/test_preview_authenticity.py`: an edited body, summary or display field, a stale target and a malformed patch are refused before a diff is shown, and the edited input and the Self bytes are kept. A preview test never establishes owner approval.
+- Integrity. `tests/test_journey_gaps.py` (class `GateRefusalTests`), `tests/test_binding_guard.py` and `tests/test_proposal_validation.py`: a row that is not an open draft, a draft this install's ledger does not hold, a hard-linked identity and a malformed binding are refused, with a recovery hint where one exists.
+- Other writers. `tests/test_alternative_writers.py`: init, legacy onboarding and the weekly draft refuse a linked identity file and keep an existing one.
+- A draft is not a note. `tests/test_draft_is_not_memory.py`. See [the first day](first-day.md).
+- Human approval. The owner runs `twinaatma self approve <proposal>` or `twinaatma self review` in their own terminal after reading the diff. The suites patch the console check and type the answer. An agent never supplies the answer and never runs the command. This gate stays NOT CHECKED until the owner's own evidence exists.
 
-Use [the source identity recipe](../references/source-identity-quality.md) for the
-repeatable unknown and canonical journeys. Literal section bodies, persisted
-proposal content and duplicate-marker refusals remain separate from human approval.
+Not checked by any script: the refusals above against a hidden real console, where a case that reaches the prompt fails. The driver for each was removed on 13 November 2026; the last commit that holds it is `69bec1e`.
 
 ## Gotchas
 
 A simulated TTY in tests proves a function path, not human consent. Terminal presence is a deployment trust assumption. Arbitrary owner-level shell or terminal control can bypass that assumption, as README documents. Do not claim stronger isolation than the deployment enforces. Proposal-only memory operations remain available when the human approval gate is pending.
-
-Use [complete alternative-writer preservation](../references/source-identity-writers.md) for native Windows/Linux aliases, actual public writers and all reused source families. Include both focused reports in the cumulative score. This source outcome leaves independent approval pending.
 
 ## Journey fixes (21 October 2026)
 
