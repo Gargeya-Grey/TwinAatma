@@ -208,8 +208,24 @@ def _is_link(path: Path, *, complete=False) -> bool:
 
 
 def iter_markdown(vault: Path) -> list[Path]:
-    """All indexable markdown files, confined to the real vault directory."""
+    """All indexable markdown files, confined to the real vault directory.
+
+    This list holds profile drafts. A route that returns notes uses `iter_notes`.
+    """
     return _markdown_inventory(vault)
+
+
+def iter_notes(vault: Path) -> list[Path]:
+    """The files that are notes: every indexable file except an undecided profile draft.
+
+    Every route that returns notes and lists files itself starts here, so the draft rule
+    is not repeated per route. `tests/test_draft_is_not_memory.py` names each caller of
+    the plain list and why it may see a draft.
+    """
+    from knowledgeos.search import is_undecided_draft
+
+    return [path for path in _markdown_inventory(vault)
+            if not is_undecided_draft(path.relative_to(vault).as_posix())]
 
 
 def _complete_walk(root: str, skip_directory: Callable[[Path, str], bool]) -> Iterator[tuple[str, list[str], list[str]]]:

@@ -156,7 +156,11 @@ class ImportMemory(ImportCase):
                              ("f.md", "privacy: private\nprivacy: public"),
                              ("g.md", "privacy: something-new"),
                              ("h.md", '"privacy": private'),
-                             ("i.md", "do-not-remember: yes")):
+                             ("i.md", "do-not-remember: yes"),
+                             ("j.md", "privacy:\n  level: private"),
+                             ("k.md", "{title: Route, privacy: private}"),
+                             ("l.md", "meta:\n  privacy: private"),
+                             ("m.md", "title: Route\nnotes: [{privacy: private}]")):
             with self.subTest(marker=marker):
                 before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
                 source = self.source(name, f"---\n{marker}\n---\n\n- Prefers the copper meadow route to work.\n"
@@ -320,6 +324,68 @@ class ImportMemory(ImportCase):
         self.assertEqual((report["files"], report["imported"]), (1, 1), report)
         self.assertTrue(any("is a link" in problem and "linked.md" in problem for problem in report["problems"]),
                         report["problems"])
+
+    def linked_folder(self, link: Path, target: Path) -> None:
+        """Make ``link`` a folder link to ``target``: a junction on Windows, a symlink elsewhere."""
+        try:
+            if os.name == "nt":
+                import _winapi
+
+                _winapi.CreateJunction(str(target), str(link))
+            else:
+                os.symlink(target, link, target_is_directory=True)
+        except OSError:
+            self.skipTest("this file system has no folder links")
+        self.addCleanup(lambda: os.path.lexists(link) and (os.rmdir(link) if os.name == "nt" else os.unlink(link)))
+
+    def test_a_linked_folder_is_not_entered(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "diary.md").write_text("The private diary says the vault code is 4417.\n", encoding="utf-8")
+        (self.vault / "Inbox" / "old-plan.md").write_text(
+            "---\ntitle: Old plan\ntype: note\n---\n\nThe old plan was to ship in March.\n", encoding="utf-8")
+        folder = self.root / "exports" / "with-folders"
+        (folder / "real").mkdir(parents=True)
+        (folder / "one.md").write_text("The first plan is to ship in June.\n", encoding="utf-8")
+        (folder / "real" / "two.md").write_text("The second plan is to ship in July.\n", encoding="utf-8")
+        self.linked_folder(folder / "outside", elsewhere)
+        self.linked_folder(folder / "real" / "into-vault", self.vault / "Inbox")
+        before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
+        report = importer.import_path(self.api(), folder, "Folders", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (2, 2), report)
+        for name in ("outside", "real/into-vault"):
+            self.assertTrue(any("is a linked folder, skipped" in problem and problem.endswith(name)
+                                for problem in report["problems"]), report["problems"])
+        self.assertNotIn("4417", repr(report))
+        self.assertNotIn("March", repr(report))
+        added = [name for name in sorted(p.name for p in (self.vault / "Inbox").iterdir()) if name not in before]
+        self.assertEqual(len(added), 2, added)
+        for name in added:
+            self.assertNotIn("4417", (self.vault / "Inbox" / name).read_text(encoding="utf-8"))
+
+    def test_a_linked_folder_given_as_the_source_reads_nothing_of_the_vault(self):
+        (self.vault / "Inbox" / "old-plan.md").write_text(
+            "---\ntitle: Old plan\ntype: note\n---\n\nThe old plan was to ship in March.\n", encoding="utf-8")
+        link = self.root / "exports-link"
+        self.linked_folder(link, self.vault / "Inbox")
+        before = sorted(p.name for p in (self.vault / "Inbox").iterdir())
+        report = importer.import_path(self.api(), link, "Link", draft_profile=False)
+        self.assertEqual((report["files"], report["imported"]), (0, 0), report)
+        self.assertTrue(report["problems"], report)
+        self.assertEqual(sorted(p.name for p in (self.vault / "Inbox").iterdir()), before)
+
+    def test_a_lost_signed_record_is_reported_not_passed_over(self):
+        import shutil
+
+        source = self.source("rules.md", "- Never files the lost weekly report.\n")
+        first = importer.import_path(self.api(), source, "Rules")
+        self.assertNotIn("error", self.api().reject_self_update(first["profile_draft"], "Not mine."))
+        settled = importer.import_path(self.api(), source, "Rules")
+        self.assertEqual((settled["rule_like_lines"], settled["drafts_not_checked"]), (0, 0), settled)
+        shutil.rmtree(self.root / "state")
+        again = importer.import_path(self.api(), source, "Rules")
+        self.assertGreaterEqual(again["drafts_not_checked"], 1, again)
+        self.assertTrue(any("not in the signed record" in problem for problem in again["problems"]), again)
 
     def test_two_labels_that_look_alike_are_two_sources(self):
         source = self.source("same.md", "The shared plan is to ship in June.\n")

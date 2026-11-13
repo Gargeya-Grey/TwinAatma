@@ -434,31 +434,72 @@ def _pairs_exclude(pairs) -> bool:
     return False
 
 
-def _metadata_pairs(text: str) -> list[tuple[str, list[str]]]:
-    """Each key line of the metadata block with its values, a repeated key included.
+_KEY_WORD = (r"(?:memory[\s_\-]*privacy|memory[\s_\-]*policy|privacy|sensitivity|"
+             r"third[\s_\-]*party[\s_\-]*sensitive|do[\s_\-]*not[\s_\-]*remember|sensitive)")
+# A privacy key inside a `{...}` mapping, or written as a `? key`. This reader does not
+# take those forms apart, so the note stays private whatever the value says.
+_KEY_IN_BRACES = re.compile(r"[\"']?\b" + _KEY_WORD + r"[\"']?\s*:", re.I)
+_KEY_AS_QUESTION = re.compile(r"^\s*(?:-\s*)*\?\s*[\"']?" + _KEY_WORD + r"\b", re.I)
 
-    A parsed mapping keeps one value for a key that appears twice. The policy reads the
-    lines, so `privacy: private` counts wherever it stands.
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" \t"))
+
+
+def _is_marker_key(raw) -> bool:
+    return _metadata_key(raw) in _PRIVACY_KEYS | _FLAG_KEYS
+
+
+def _block_excludes(text: str) -> bool:
+    """True when the metadata block of ``text`` says "do not remember".
+
+    The block is read line by line, and it is not parsed into one mapping, because a
+    mapping keeps one value for a key that appears twice and loses a key at a depth the
+    caller did not expect. A privacy key counts wherever it stands: at the top, under
+    another key, in a list item. Where the value is in a form this reader does not take
+    apart (a nested mapping, a value on the next line, a `{...}` mapping, a `? key`),
+    the answer is yes. `tests/test_privacy_yaml_oracle.py` compares this reader with a
+    full YAML parser on generated documents.
     """
     match = _METADATA_BLOCK.match(text)
+    if not match:
+        return False
+    lines = [line for line in match.group(1).splitlines()
+             if line.strip() and not line.strip().startswith("#")]
     pairs: list[tuple[str, list[str]]] = []
-    for line in match.group(1).splitlines() if match else ():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
+    depth = 0
+    for index, line in enumerate(lines):
+        in_braces = depth > 0 or "{" in line
+        depth = max(0, depth + line.count("{") - line.count("}"))
+        if (in_braces and _KEY_IN_BRACES.search(line)) or _KEY_AS_QUESTION.match(line):
+            return True
+        entry = line.strip()
+        if entry.startswith("-"):
+            # A list item belongs to the key above it. It can also hold a key of its own.
+            entry = entry.lstrip("- \t")
+            if pairs:
+                pairs[-1][1].append(entry)
+        if ":" not in entry:
             continue
-        if stripped.startswith("-") and pairs:
-            pairs[-1][1].append(stripped[1:])
-        elif ":" in line:
-            key, _, rest = line.partition(":")
-            pairs.append((key, [rest]))
-    return pairs
+        key, _, rest = entry.partition(":")
+        if _is_marker_key(key) and not _plain_scalar(rest):
+            following = lines[index + 1] if index + 1 < len(lines) else ""
+            if following and _indent(following) > _indent(line) and not following.strip().startswith("-"):
+                return True
+        pairs.append((key, [rest]))
+    return _pairs_exclude(pairs)
 
 
 def marked_excluded(text: str = "", metadata=None) -> bool:
     """True when the text's own metadata, or the given mapping, says "do not remember"."""
     if isinstance(metadata, dict) and _pairs_exclude(metadata.items()):
         return True
-    return _pairs_exclude(_metadata_pairs(str(text or "")))
+    return _block_excludes(str(text or ""))
+
+
+def metadata_excludes(metadata) -> bool:
+    """The same question for a mapping alone, with no text to read."""
+    return isinstance(metadata, dict) and _pairs_exclude(metadata.items())
 
 
 def _plain_scalar(value):
@@ -783,6 +824,11 @@ class RememberingPolicy:
         text = str(text or "")
         if marked_excluded(text, metadata):
             return "explicit_exclusion"
+        return self.content_reason(text)
+
+    def content_reason(self, text):
+        """Why the words themselves are withheld: a credential, or forgotten text."""
+        text = str(text or "")
         pattern_reason = _pattern_reason(text)
         if pattern_reason:
             return pattern_reason
@@ -862,13 +908,17 @@ class RememberingPolicy:
 
     def scrub(self, value):
         if isinstance(value, str):
-            if value in self.state["forgotten"] or self.text_reason(value):
+            # A string on its way out is a piece of a note: a body, a snippet, a title.
+            # Whether the note is private was decided when the whole file was read, from
+            # its own metadata block. A body that begins with a YAML example is not a
+            # metadata block, so only the content checks apply here.
+            if value in self.state["forgotten"] or self.content_reason(value):
                 return "[Excluded by remembering policy]"
             return value
         if isinstance(value, list):
             return [self.scrub(item) for item in value]
         if isinstance(value, dict):
-            if self.text_reason("", value):
+            if metadata_excludes(value):
                 return "[Excluded by remembering policy]"
             return {str(self.scrub(key)): self.scrub(item) for key, item in value.items()}
         return value
@@ -881,10 +931,10 @@ class RememberingPolicy:
     def current_connection(self):
         """A disposable relational view of permitted current sources, never cache claims."""
         import sqlite3
-        from knowledgeos.indexer import iter_markdown, _process_file, _SCHEMA_SQL, _INSERT_NOTE_SQL
+        from knowledgeos.indexer import iter_notes, _process_file, _SCHEMA_SQL, _INSERT_NOTE_SQL
         from knowledgeos.links import build_note_lookup
 
-        files = [path for path in iter_markdown(self.vault) if self.read(path, historical=False) is not None]
+        files = [path for path in iter_notes(self.vault) if self.read(path, historical=False) is not None]
         lookup = build_note_lookup(files, self.vault)
         allowed = {path.relative_to(self.vault).as_posix() for path in files}
         conn = sqlite3.connect(":memory:")

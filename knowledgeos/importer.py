@@ -165,16 +165,11 @@ def read_source(path: Path, vault: Path, *, many_files: bool = False) -> tuple[l
         files = [resolved]
     else:
         files = []
-        for candidate in sorted(resolved.rglob("*")):
+        for candidate in _plain_files(resolved, problems):
             if candidate.suffix.lower() not in SOURCE_SUFFIXES:
                 continue
-            shown = candidate.relative_to(resolved).as_posix()
-            if _is_link(candidate):
-                problems.append(f"is a link, skipped: {shown}")
-            elif not candidate.is_file():
-                continue
-            elif _within(candidate.resolve(), home):
-                problems.append(f"is a file of the vault, skipped: {shown}")
+            if _within(candidate.resolve(), home):
+                problems.append(f"is a file of the vault, skipped: {candidate.relative_to(resolved).as_posix()}")
             else:
                 files.append(candidate)
         if len(files) > MAX_FILES and not many_files:
@@ -195,6 +190,37 @@ def read_source(path: Path, vault: Path, *, many_files: bool = False) -> tuple[l
     if not documents and not problems:
         problems.append("no markdown or text files found")
     return documents, problems
+
+
+def _plain_files(folder: Path, problems: list[str]) -> list[Path]:
+    """Every plain file below ``folder``. A linked folder is not entered.
+
+    A Windows junction is a link too, and a walk that follows one reads another folder
+    under this folder's name. Each link that is skipped is named in ``problems``.
+    """
+    from knowledgeos.indexer import _is_link
+
+    found: list[Path] = []
+    pending = [folder]
+    while pending:
+        current = pending.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            problems.append(f"unreadable folder, skipped: {current.relative_to(folder).as_posix()}")
+            continue
+        for entry in entries:
+            shown = entry.relative_to(folder).as_posix()
+            if _is_link(entry):
+                if entry.is_dir():
+                    problems.append(f"is a linked folder, skipped: {shown}")
+                elif entry.suffix.lower() in SOURCE_SUFFIXES:
+                    problems.append(f"is a link, skipped: {shown}")
+            elif entry.is_dir():
+                pending.append(entry)
+            elif entry.is_file():
+                found.append(entry)
+    return sorted(found)
 
 
 def _read_plain_file(file: Path) -> tuple[bytes, str | None]:
@@ -277,6 +303,9 @@ def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None, int]:
         if row.get("status") == "draft" and waiting is None and asked & wanted:
             waiting = str(row.get("proposal") or "")
         held |= asked
+    # A draft file with no signed row (the signing state was lost, or the vault was
+    # restored without it) is history nobody can check. It is counted, never trusted.
+    unchecked += len(gate.untrusted_proposals(api.vault, api.proposals_dir))
     return [rule for rule in rules if gate.line_digest(rule) not in held], waiting, unchecked
 
 
@@ -382,7 +411,8 @@ def import_path(api: Any, path: Path, label: str | None = None, *, dry_run: bool
     report = import_items(api, items, label, dry_run=dry_run, draft_profile=draft_profile)
     report["files"] = len(documents)
     if report["drafts_not_checked"]:
-        problems.append(f"{report['drafts_not_checked']} older profile draft(s) could not be checked, because "
-                        "the draft file is gone or was changed. A rule from them can be drafted again")
+        problems.append(f"{report['drafts_not_checked']} earlier profile draft(s) could not be checked: the "
+                        "draft file is gone or was changed, or the draft is not in the signed record. A rule "
+                        "you already decided can be drafted again; reject it again in `twinaatma self review`")
     report["problems"] = problems
     return report

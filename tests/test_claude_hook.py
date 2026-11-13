@@ -200,7 +200,8 @@ class InstallTheHooks(TempVaultCase):
         return payload
 
     def test_a_number_that_a_rewrite_would_change_leaves_the_file_alone(self):
-        for text in ('{"precise": 1.234567890123456789}', '{"huge": 1e999}', '{"deep": [{"n": -1e999}]}'):
+        for text in ('{"precise": 1.234567890123456789}', '{"huge": 1e999}', '{"deep": [{"n": -1e999}]}',
+                     '{"zero": -0}', '{"deep": [{"zero": -0}]}'):
             with self.subTest(settings=text):
                 before = self.existing(text.encode("utf-8"))
                 done, message = self.install()

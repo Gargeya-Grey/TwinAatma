@@ -119,7 +119,7 @@ on branch `product/one-journey`. Each line says how it was checked.
 | 3 | The suite's plain-question cases pass | `tests/test_first_contact.py`. The older 7-case count was not run again. Known miss: a question that shares no word and no concept cluster with the note. |
 | 4 | Built, not run for real | The command lines for Claude Code and Codex are built and tested with a recorder in place of the host. A real registration is the person's own step. |
 | 5 | Pass | `tests/test_first_contact.py` and `first_day.py`. |
-| 6 | Full suite green, with known open defects; mutation check not run | 1209 tests, 33 skipped, run alone at commit `c66ed17`. `tests/score.py` reported 100.0 across 71 scenarios at an earlier commit of the same day. The suite does not cover the open defects under "Open design questions after three reviews". |
+| 6 | Full suite green at `01dcf65`; the result after the fourth-review repairs is recorded in the line below this table | 1229 tests, 33 skipped, run alone at commit `01dcf65`. `tests/score.py` reported 100.0 across 71 scenarios at an earlier commit of the same day. |
 
 ### What real Claude Code chats showed
 
@@ -179,6 +179,49 @@ skips. Each draft's lines are kept as digests in the signed record outside the
 vault, so a rejected rule stays rejected when its draft file is edited or deleted.
 This added the field `asked_lines` to that record; an older row without it is
 trusted only while its draft file is unchanged.
+
+### A fourth review, and how each rule is now checked
+
+The fourth review read the work against [the threat model](threat-model.md). It said
+"do not ship" with 6 findings inside the release bar. Two were leaks in work that was
+called done: a privacy marker written below another key or inside braces, and
+`memory_related` returning a draft. The rules were right. The checks behind them were
+lists of cases written by the same hand that wrote the code. So each rule now has a
+check that does not depend on that hand.
+
+**4. The privacy reader is checked against a full YAML parser.** The toolkit reads
+metadata without a YAML library. `tests/test_privacy_yaml_oracle.py` writes several
+thousand metadata blocks with a real YAML library, in each style that library has, and
+requires the reader to keep a note private whenever the parsed block holds a privacy
+key that does not say "share". The library is a tool of the test only. A marker inside
+braces, below another key, or in a form the reader does not take apart keeps the note
+private.
+
+**5. One list of notes.** A route that reads files itself starts from
+`indexer.iter_notes`, which leaves drafts out. The same test file names each remaining
+caller of the plain file list and the reason it may see a draft. A new caller fails
+that test until it is named.
+
+**6. Import does not enter a linked folder.** A Windows junction is a link. Import
+walks the folder itself, skips each linked file and folder, and names it.
+
+**7. A draft that is not in the signed record is reported.** When the state folder is
+lost, import counts each draft it cannot check and says that a rule the person already
+decided can be drafted again. The profile still needs a decision in a terminal.
+
+**8. The settings merge refuses `-0`.** A rewrite would turn it into `0`.
+
+Recorded and not repaired, with the reason:
+
+- Import knows a source by its exact label. Two labels that differ only in case or
+  punctuation are two sources. Import was never released, so no person has notes under
+  the older rule; a second import under a different spelling adds the notes again.
+- A text that only looks like a metadata block at the top of a note body is read as
+  the body. Only the first block of a file is metadata.
+
+A fifth review is over the limit of four that the owner's general rules set. The
+builder ran one narrow check of these repairs because two leaks reached the fourth
+review. Its result is in the handoff.
 
 ## Speed at 10,000 notes is deferred, on purpose
 

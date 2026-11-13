@@ -19,7 +19,10 @@ RETURNS_NOTES = {
     "memory_search": [{"query": "Friday afternoon"}, {"query": WORDS}, {"query": "Self proposal"},
                       {"query": "what do I do with the quokka ledger on a Friday"},
                       {"query": "heuristics"}, {"query": "Quokka rule"}],
-    "memory_related": [{"path_or_id": "People/Self.md", "hops": 2}],
+    "memory_related": [{"path_or_id": "People/Self.md", "hops": 2},
+                       {"path_or_id": "Concepts/Linker.md", "hops": 1},
+                       {"path_or_id": "Concepts/Linker.md", "hops": 2},
+                       {"path_or_id": "Concepts/Linked.md", "hops": 2}],
     "memory_decisions": [{}],
     "memory_drift": [{"days": 30}],
     "memory_timeline": [{"days": 30}],
@@ -43,11 +46,45 @@ class DraftCase(TempVaultCase):
     def setUp(self) -> None:
         super().setUp()
         self.api().capture("Quokka ledger owner", "The quokka ledger is owned by the finance team.")
-        drafted = self.api().propose_self_update("Quokka rule", "heuristics", f"* {RULE}", "Said so.", "append")
+        self.write("Concepts/Linked.md", "---\ntitle: Linked\ntype: concept\n---\n\nA note the draft names.\n")
+        # The draft links to a note, and two notes link to the draft. Either way round,
+        # the draft is no neighbour of a note.
+        drafted = self.api().propose_self_update("Quokka rule", "heuristics",
+                                                 f"* {RULE} See [[Linked]]. It contradicts: [[Linked]].",
+                                                 "Said so.", "append")
         self.draft = drafted["proposal_path"]
+        name = self.draft.rsplit("/", 1)[-1]
+        self.write("Concepts/Linker.md", "---\ntitle: Linker\ntype: concept\n---\n\n"
+                                         f"See [the draft](../People/Self-Proposals/{name}) and [[{name[:-3]}]].\n")
+        self.write("Concepts/Second.md", "---\ntitle: Second\ntype: concept\n---\n\n"
+                                         f"Also [the draft](../People/Self-Proposals/{name}).\n")
 
     def ask(self, tool: str, arguments: dict) -> str:
         return json.dumps(dispatch(MemoryAPI(self.vault), tool, arguments), ensure_ascii=False)
+
+    def draft_rows(self, tool: str, arguments: dict) -> list[str]:
+        """Each value in the answer that is the path of a draft.
+
+        A note the person wrote can name a draft in its own text; that text is the note's.
+        What may not happen is a row, a link target or a candidate that *is* a draft.
+        """
+        found: list[str] = []
+
+        def walk(value) -> None:
+            if isinstance(value, dict):
+                for key, inner in value.items():
+                    walk(key)
+                    walk(inner)
+            elif isinstance(value, (list, tuple)):
+                for inner in value:
+                    walk(inner)
+            elif isinstance(value, str):
+                shown = value.replace("\\", "/").strip().lstrip("./")
+                if shown.casefold().startswith("people/self-proposals/"):
+                    found.append(value)
+
+        walk(dispatch(MemoryAPI(self.vault), tool, arguments))
+        return found
 
 
 class EveryReadTool(DraftCase):
@@ -68,7 +105,15 @@ class EveryReadTool(DraftCase):
                      "memory_timeline", "memory_bootstrap_context", "memory_pending_outcomes"):
             for arguments in RETURNS_NOTES[tool]:
                 with self.subTest(tool=tool, arguments=arguments):
-                    self.assertNotIn("Self-Proposals/", self.ask(tool, arguments))
+                    self.assertEqual(self.draft_rows(tool, arguments), [])
+
+    def test_a_note_that_links_to_the_draft_does_not_make_it_a_neighbour(self):
+        for start in ("Concepts/Linker.md", "Concepts/Linked.md", "Concepts/Second.md"):
+            for hops in (1, 2, 3):
+                with self.subTest(start=start, hops=hops):
+                    arguments = {"path_or_id": start, "hops": hops}
+                    self.assertEqual(self.draft_rows("memory_related", arguments), [])
+                    self.assertNotIn(MARK, self.ask("memory_related", arguments))
 
     def test_the_draft_in_any_shape_stays_out(self):
         path = self.vault / self.draft
@@ -85,9 +130,66 @@ class EveryReadTool(DraftCase):
         for arguments in RETURNS_NOTES["memory_search"]:
             with self.subTest(arguments=arguments):
                 self.assertNotIn(MARK, self.ask("memory_search", arguments))
+        for arguments in RETURNS_NOTES["memory_related"]:
+            with self.subTest(arguments=arguments):
+                self.assertEqual(self.draft_rows("memory_related", arguments), [])
+                self.assertNotIn(MARK, self.ask("memory_related", arguments))
 
     def test_the_real_note_is_still_found(self):
         self.assertIn("Quokka-ledger-owner", self.ask("memory_search", {"query": WORDS}))
+
+
+class EveryReport(DraftCase):
+    """The reports read the files, not the index. A draft is no row of theirs either."""
+
+    def test_the_view_the_reports_read_holds_no_draft(self):
+        from knowledgeos.remembering import RememberingPolicy
+
+        connection = RememberingPolicy(self.vault).current_connection()
+        try:
+            paths = [row[0] for row in connection.execute("SELECT path FROM notes")]
+            links = [value for row in connection.execute("SELECT source, destination FROM links") for value in row]
+        finally:
+            connection.close()
+        self.assertIn("Concepts/Linker.md", paths)
+        self.assertEqual([path for path in paths + links if "self-proposals/" in path.casefold()], [])
+
+    def test_no_report_finding_names_the_draft(self):
+        from knowledgeos import intelligence
+
+        api = MemoryAPI(self.vault)
+        found = {"tensions": intelligence.find_tensions(api), "orphans": intelligence.orphan_notes(api),
+                 "gaps": intelligence.knowledge_gaps(api)}
+        self.assertNotIn("self-proposals/", json.dumps(found, default=str).casefold())
+
+
+class EveryFileList(unittest.TestCase):
+    """A route that lists the vault's files itself says here why it may see a draft."""
+
+    # File name -> the number of calls of the plain list, and the reason each is allowed.
+    MAY_SEE_DRAFTS = {
+        "indexer.py": (0, "defines both lists; the index keeps one row per file, drafts included"),
+        "validator.py": (1, "checks the form of every file"),
+        "doctor.py": (2, "counts files and conflict copies; it returns no note text"),
+        "ids.py": (1, "gives every file an id"),
+        "vault.py": (1, "the plain file iterator of the Vault class"),
+        "outcomes.py": (1, "confirms one given path; it refuses the draft folder on the line before"),
+        "memory.py": (1, "a read by id, which reaches a draft on purpose like a read by path"),
+    }
+
+    def test_each_call_of_the_plain_file_list_is_named(self):
+        from support import ROOT
+
+        calls = {}
+        for file in sorted((ROOT / "knowledgeos").glob("*.py")):
+            source = file.read_text(encoding="utf-8")
+            count = len(re.findall(r"(?<!def )(?<![\w.])iter_markdown\(", source))
+            if count:
+                calls[file.name] = count
+        expected = {name: count for name, (count, _reason) in self.MAY_SEE_DRAFTS.items() if count}
+        self.assertEqual(calls, expected,
+                         "A route that returns notes uses `indexer.iter_notes`, which leaves profile drafts out. "
+                         "A route that must see drafts is added to MAY_SEE_DRAFTS with its reason.")
 
 
 class OnPurpose(DraftCase):

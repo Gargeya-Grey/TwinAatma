@@ -84,6 +84,16 @@ returns, change the rule so that the unknown case is refused; do not add one mor
 to a list. The owner gave design decisions to the builder on 13 November 2026: decide,
 record the decision in `docs/product-direction.md`, and continue.
 
+Each rule below has a check. When a review finds a fault of one of these kinds, repair
+the check first, so that it fails on the fault, then the code.
+
+| Rule | What enforces it |
+|---|---|
+| A profile draft is not a note | `tests/test_draft_is_not_memory.py`: every tool is in a table, and every direct file list is named |
+| A privacy key in a form the reader does not know keeps the note private | `tests/test_privacy_yaml_oracle.py` (needs PyYAML) and `tests/test_privacy_metadata_comments.py` |
+| Import never enters a link and names what it skips | `tests/test_import_memory.py` |
+| A document names only tools that exist | `tests/test_docs.py` |
+
 Never run `setup-host --global` on the owner's machine without `--print`. It registers a
 server with the owner's hosts and, for Claude Code, changes `~/.claude/settings.json`.
 Tests move that folder with `CLAUDE_CONFIG_DIR`.

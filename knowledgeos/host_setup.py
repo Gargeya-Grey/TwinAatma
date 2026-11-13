@@ -400,6 +400,12 @@ def _strict_json(raw: bytes) -> object:
             raise ValueError(f"the number {text} would change in a rewrite")
         return value
 
+    def whole(text: str) -> int:
+        value = int(text)
+        if value == 0 and text.strip().startswith("-"):
+            raise ValueError(f"the number {text} would change in a rewrite")
+        return value
+
     def pairs(items: list[tuple[str, object]]) -> dict:
         document = dict(items)
         if len(document) != len(items):
@@ -407,7 +413,7 @@ def _strict_json(raw: bytes) -> object:
         return document
 
     return json.loads(raw.decode("utf-8-sig"), parse_constant=constant, parse_float=number,
-                      object_pairs_hook=pairs)
+                      parse_int=whole, object_pairs_hook=pairs)
 
 
 def _replace_if_unchanged(path: Path, payload: bytes, original: bytes | None) -> bool:

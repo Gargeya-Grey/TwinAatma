@@ -558,10 +558,12 @@ class MemoryAPI:
         resolves identically there.
         """
         from knowledgeos.links import build_note_lookup, extract_raw_links, link_candidates, normalize_link
-        from knowledgeos.indexer import iter_markdown
+        from knowledgeos.indexer import iter_notes
 
         policy = RememberingPolicy(self.vault)
-        files = [p for p in iter_markdown(self.vault) if policy.read(p, historical=False) is not None]
+        # A profile draft is not a note, so it is no neighbour of one either: it is left
+        # out before the links are read, as a target and as a source.
+        files = [p for p in iter_notes(self.vault) if policy.read(p, historical=False) is not None]
         lookup = build_note_lookup(files, self.vault)
         by_rel: dict[str, Path] = {p.relative_to(self.vault).as_posix(): p for p in files}
         warnings_by_source: dict[str, list[dict[str, Any]]] = {}

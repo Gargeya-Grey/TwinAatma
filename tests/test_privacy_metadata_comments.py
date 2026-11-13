@@ -28,6 +28,12 @@ EXCLUDED = {
     "unknown": "privacy: team-only",
     "level": "sensitivity: high",
     "yes": "privacy: yes",
+    "nested": "privacy:\n  level: private",
+    "nextline": "privacy:\n  private",
+    "under": "meta:\n  privacy: private",
+    "initem": "notes:\n  - privacy: private",
+    "question": "? privacy\n: private",
+    "flagnested": "do_not_remember:\n  value: true",
 }
 KEPT = {
     "public": "privacy: public # shared with the team",
@@ -104,6 +110,108 @@ class MarkedNotes(TempVaultCase):
             with self.subTest(form=name):
                 self.assertTrue(marked_excluded(text))
         self.assertFalse(marked_excluded("A body line that says privacy: private is not metadata."))
+
+
+WHOLE_BLOCKS = {
+    "flow": "{title: Larkspur flow, type: note, privacy: private}",
+    "flowlines": "{\n  title: Larkspur flowlines,\n  type: note,\n  \"privacy\": private\n}",
+    "flowflag": "{title: Larkspur flowflag, type: note, do_not_remember: true}",
+    "nestedflow": "title: Larkspur nestedflow\ntype: note\nmeta: {privacy: private}",
+    "deep": "title: Larkspur deep\ntype: note\nmeta:\n  access:\n    privacy:\n      level: private",
+}
+
+
+class MarkersInOtherShapes(TempVaultCase):
+    """A marker inside braces or below another key keeps the note out of every route."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        for name, block in WHOLE_BLOCKS.items():
+            self.write(f"Inbox/{name}.md", f"---\n{block}\n---\n\nThe larkspur {name} audit ends in April.\n")
+        self.write("Inbox/plain.md", "---\ntitle: Larkspur plain\ntype: note\n---\n\n"
+                                     "The larkspur plain audit ends in April.\n")
+
+    def test_search_does_not_offer_them(self):
+        found = self.api().search("larkspur audit")
+        offered = {row["path"] for row in found.get("ranked", []) + found.get("possibly_related", [])}
+        self.assertEqual(offered & {f"Inbox/{name}.md" for name in WHOLE_BLOCKS}, set())
+        self.assertIn("Inbox/plain.md", offered)
+
+    def test_no_read_tool_returns_their_text(self):
+        import json
+
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        for tool, arguments in (("memory_search", {"query": "larkspur audit April"}),
+                                ("memory_session_start", {"task_hint": "larkspur audit April"}),
+                                ("memory_bootstrap_context", {"task_hint": "larkspur audit April"}),
+                                ("memory_timeline", {"days": 30}),
+                                ("memory_related", {"path_or_id": "Inbox/plain.md", "hops": 2})):
+            answer = json.dumps(dispatch(MemoryAPI(self.vault), tool, arguments), ensure_ascii=False)
+            for name in WHOLE_BLOCKS:
+                with self.subTest(tool=tool, block=name):
+                    self.assertNotIn(f"larkspur {name}", answer.casefold())
+
+    def test_a_read_by_path_is_refused(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        for name in WHOLE_BLOCKS:
+            with self.subTest(block=name):
+                try:
+                    answer = repr(dispatch(MemoryAPI(self.vault), "memory_get_note",
+                                           {"path_or_id": f"Inbox/{name}.md"}))
+                except Exception as error:  # a refusal may be raised or returned
+                    answer = repr(error)
+                self.assertNotIn("audit ends in April", answer)
+
+    def test_the_hook_does_not_show_them(self):
+        import io
+        import json
+
+        from knowledgeos import claude_hook
+
+        out = io.StringIO()
+        event = {"hook_event_name": "UserPromptSubmit", "prompt": "when does the larkspur audit end?"}
+        claude_hook.main(["--vault", str(self.vault)], stdin=io.StringIO(json.dumps(event)), stdout=out)
+        said = out.getvalue().casefold()
+        self.assertIn("larkspur plain", said)
+        for name in WHOLE_BLOCKS:
+            with self.subTest(block=name):
+                self.assertNotIn(f"larkspur {name}", said)
+
+    def test_the_doctor_counts_them(self):
+        from knowledgeos import doctor
+
+        self.assertEqual(doctor.count_privacy_marked(self.vault), len(WHOLE_BLOCKS))
+
+
+class ANoteAboutPrivacy(TempVaultCase):
+    """A note that explains privacy markers in its body is an ordinary note."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write("Concepts/Marker-guide.md",
+                   "---\ntitle: Marker guide\ntype: concept\n---\n"
+                   "---\nprivacy: private\n---\n\n"
+                   "The harbour guide says: write the lines above at the top of a note to keep it private.\n")
+
+    def test_it_can_be_read(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        note = dispatch(MemoryAPI(self.vault), "memory_get_note", {"path_or_id": "Concepts/Marker-guide.md"})
+        self.assertNotIn("error", note, note)
+        self.assertIn("harbour guide", note["body"])
+
+    def test_it_reaches_the_startup_context(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        started = dispatch(MemoryAPI(self.vault), "memory_session_start", {"task_hint": "harbour guide marker"})
+        self.assertIn("Concepts/Marker-guide.md", repr(started["context"]["relevant"]))
+
+    def test_a_mapping_on_its_way_out_is_still_judged(self):
+        policy = RememberingPolicy(self.vault)
+        self.assertEqual(policy.scrub({"privacy": "private", "body": "x"}), "[Excluded by remembering policy]")
+        self.assertEqual(policy.scrub({"privacy": "ordinary", "body": "x"}), {"privacy": "ordinary", "body": "x"})
 
 
 if __name__ == "__main__":
