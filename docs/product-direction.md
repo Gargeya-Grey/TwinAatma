@@ -119,7 +119,7 @@ on branch `product/one-journey`. Each line says how it was checked.
 | 3 | The suite's plain-question cases pass | `tests/test_first_contact.py`. The older 7-case count was not run again. Known miss: a question that shares no word and no concept cluster with the note. |
 | 4 | Built, not run for real | The command lines for Claude Code and Codex are built and tested with a recorder in place of the host. A real registration is the person's own step. |
 | 5 | Pass | `tests/test_first_contact.py` and `first_day.py`. |
-| 6 | Full suite green; mutation check not run | 1205 tests, 33 skipped, run alone at commit `cbe764d`. `tests/score.py` reported 100.0 across 71 scenarios at an earlier commit of the same day. |
+| 6 | Full suite green, with known open defects; mutation check not run | 1209 tests, 33 skipped, run alone at commit `c66ed17`. `tests/score.py` reported 100.0 across 71 scenarios at an earlier commit of the same day. The suite does not cover the open defects under "Open design questions after three reviews". |
 
 ### What real Claude Code chats showed
 
