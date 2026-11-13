@@ -18,15 +18,15 @@ Read [the feature index](features/README.md) first, then the file of the feature
 
 ## The checks
 
-Run every command from the repository root. Close standard input (`< /dev/null`, or `< NUL` in cmd), because a hook test reads it.
+Run every command from the repository root. Close standard input (`< /dev/null`, or `< NUL` in cmd), because a hook test reads it. On Windows, use a checkout with a short path: at a path of 56 characters, 54 tests in five files fail with `WinError 3` or `WinError 206`, because their fixtures lie deep under `work/gc-artifacts`. A worktree below `.claude/worktrees/` is too deep.
 
 | Check | Command | Time on the builder's Windows machine |
 |---|---|---|
 | First-day journey | `python -B .agents/skills/verify-twinaatma/scripts/first_day.py --output <new-dir>` | under 1 minute |
-| Full suite | `python -B -m unittest discover -s tests` | see `docs/product-direction.md`, row 6 |
+| Full suite | `python -B -m unittest discover -s tests` | about 15 minutes |
 | One suite | `python -B -m unittest discover -s tests -p test_first_contact.py` | seconds to minutes |
 | Scorecard | `python tests/score.py` | about 1 minute |
-| Mutation check | `python tests/mutation_check.py` | about 10 minutes |
+| Mutation check | `python tests/mutation_check.py` | about 3 minutes |
 | Documents | `python tests/test_docs.py` | seconds |
 | Package | `python -B tests/package_smoke.py --wheel <wheel> --source .` or `--binary <executable>` | about 1 minute |
 | Recall evaluation | `python -B .agents/skills/verify-twinaatma/scripts/quality.py --output work/gc-artifacts/.knowledgeos/<new-name>` | about 17 minutes |

@@ -325,7 +325,8 @@ suite runs, the 37 files alone ran 15, and 6 of those were not real product line
 real ones (a refused setting in a Codex file, a refused entry in a project file, the
 vault named in the environment, the check for an ended process) now have four direct
 tests. Line coverage says that a line ran, not that a test checks it, and several
-driver tests failed under the measuring tool, so the figure is an estimate.
+tests failed in the measuring run, so the figure is an estimate. The likely cause of
+those failures is the long path of that checkout (see below); it was not confirmed.
 
 Removed: 104 files and about 35,400 lines. By area: verification scripts 22,329,
 their tests 7,684, one development fixture 2,425, documents 2,613, workflows 356.
@@ -334,6 +335,16 @@ first-day driver, and the recall evaluation with its three frozen fixtures and t
 test that guards it, because both drive the product and judge what a person would
 see. The evaluation passed on 13 November (`69bec1e`): 91 of 108 cases pass, 3 fail,
 14 do not apply; every critical source was offered (44 of 44).
+
+The suite went from 1,274 tests to 896. On the builder's Windows machine the 37 files
+took about 23 minutes of a run; the whole suite now takes about 15 minutes. After the
+removal: 896 tests pass and 21 are skipped, the scorecard reports 100.0, the
+first-day driver 37 of 37.
+
+One fact about the suite came out of this work. On Windows it must run from a short
+path. In a checkout whose path was 56 characters long, 54 tests in five files failed
+with a path error, because their fixtures lie deep under `work/gc-artifacts`. The
+same commit passed whole in a checkout at a 5-character path.
 
 What this costs. The 54-outcome count can no longer be computed from the tree. The
 journeys that only the programme drove have no check now: a host chat from an
