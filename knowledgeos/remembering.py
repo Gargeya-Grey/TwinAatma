@@ -37,6 +37,9 @@ from knowledgeos.textio import atomic_create_bytes, atomic_write_bytes
 POLICY = "twinaatma-remembering-policy-v1"
 UNAVAILABLE = "Remembering policy state is unavailable; no memory was released or saved."
 EXCLUDED = "This content is excluded by the approved remembering policy."
+UNREAD_BLOCK = ("This text opens with a metadata block in a form that is not read, so nothing was "
+                "saved or looked up. If the block marks the text private, leave it out of memory. "
+                "Otherwise send the words without the block.")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _CREDENTIALS = re.compile(
     r"-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----"
@@ -397,18 +400,27 @@ def _pattern_reason(text):
 # Five reviews found a spelling of a privacy key that an earlier reader did not see. Each
 # earlier reader looked for the key in text that it did not parse. This one refuses the
 # text it does not parse. `tests/test_privacy_yaml_oracle.py` changes blocks at random and
-# compares the answer with a full YAML parser.
+# compares the answer with a full YAML parser. A sixth review found the same fault one
+# level up, in the opening line of the block. That line is now read by the same rule, and
+# the test changes it too.
 _PRIVACY_KEYS = {"privacy", "memory_privacy", "sensitivity", "memory_policy"}
 _FLAG_KEYS = {"sensitive", "third_party_sensitive", "do_not_remember"}
 _OPEN_LABELS = {"", "ordinary", "public", "shared", "open", "normal", "none", "low",
                 "false", "no", "off", "0", "null", "~"}
 _FLAG_NOT_SET = {"", "false", "no", "off", "0", "null", "none", "~"}
-_BLOCK_OPENING = re.compile(r"\A﻿?\s*---[ \t]*(?:#[^\r\n]*)?(?:\r\n|\r|\n)")
+_WIDE_BREAKS = "\r\n\x85\u2028\u2029"  # where a full parser ends a line
+_BLOCK_START = re.compile(r"\A\ufeff?\s*---(?=[ \t" + _WIDE_BREAKS + r"]|\Z)")
+_RULE_LINE = re.compile(r"[ \t]*---[ \t]*(?:#.*)?\Z")
 _BLOCK_CLOSING = re.compile(r"(?:---|\.\.\.)(?:[ \t].*)?\Z")
 _KEY_END = re.compile(r":(?=\s|\Z)")
 _YAML_COMMENT = re.compile(r"(?:\A|\s)#.*\Z", re.S)
 _DASH = re.compile(r"-(?:\s|\Z)")
-_ODD_CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85  ﻿]")
+_ODD_CONTROL = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85\u2028\u2029\ufeff]")
+# A full parser knows two spaces: the space and the tab. Every other space character
+# is an ordinary character to it, so `key:` followed by a no-break space is no key.
+# Python calls these characters white space. The reader sees each one as `_`, which
+# is an ordinary character here and a word break in a key name.
+_ODD_SPACE = re.compile("[\xa0\u1680\u2000-\u200a\u202f\u205f\u3000]")
 _KEY_STARTS = frozenset("-?:,[]{}#&*!|>'\"%@`")
 _TEXT = object()        # a text value: its words are not read, and it holds no key
 _MANY_LINES = object()  # a value written over several lines
@@ -437,15 +449,46 @@ def _no_content(line: str) -> bool:
 
 
 def _metadata_lines(text: str):
-    """``(lines, closed)`` of the first metadata block, or ``None`` when the text has none."""
-    opening = _BLOCK_OPENING.match(text)
+    """``(lines, plain)`` of the first metadata block, or ``None`` when the text has none.
+
+    The block opens with `---` on the first line that holds anything. A full parser
+    ends a line at more characters than a line feed, so the opening line is cut at any
+    of them. Inside the block such a character is odd, and the block is not understood.
+    ``plain`` is false when the opening line holds more than a comment: a full parser
+    reads that as the start of the content (`--- {privacy: private}`).
+    """
+    opening = _BLOCK_START.match(text)
     if not opening:
         return None
-    lines = re.split(r"\r\n|\r|\n", text[opening.end():])
+    rest = text[opening.end():]
+    cut = re.search("\r\n|[" + _WIDE_BREAKS + "]", rest)
+    first, rest = (rest[:cut.start()], rest[cut.end():]) if cut else (rest, "")
+    lines = re.split(r"\r\n|\r|\n", rest)
     for number, line in enumerate(lines):
         if _BLOCK_CLOSING.match(line):
-            return lines[:number], True
-    return lines, False
+            lines = lines[:number]
+            break
+    return lines, not first.strip() or first.strip().startswith("#")
+
+
+def _starts_as_prose(first: str) -> bool:
+    """True when the first line of a block cannot open a mapping.
+
+    A rule line and words are ordinary writing, not metadata. No key separator stands
+    on the line, and the line does not start a form that can hold a key on a later line
+    (`{`, `?`, a tag, an anchor, a list). An alias, a text block and a closed bracket of
+    plain words hold no key.
+    """
+    if _KEY_END.search(first):
+        return False
+    head = first[0]
+    if head not in _KEY_STARTS or head in "*|>":
+        return True
+    if head == "[":
+        close = first.find("]")
+        return (close > 0 and not any(mark in first[1:close] for mark in ":{}[\"'")
+                and not first[close + 1:].lstrip(" ").startswith(":"))
+    return False
 
 
 class _BlockReader:
@@ -648,17 +691,37 @@ def _simple_list(rest: str):
             return None
 
 
+def _not_json(_name):
+    raise ValueError("not a JSON value")
+
+
+def _json_node(node):
+    """A parsed JSON value in the shapes the block reader gives: pairs, lists, labels."""
+    if isinstance(node, _Mapping):
+        return _Mapping((key, _json_node(value)) for key, value in node)
+    if isinstance(node, list):
+        return [_json_node(item) for item in node]
+    return node
+
+
 def _flow_value(rest: str):
     """A value that starts with `[` or `{`.
 
-    A plain one-line list gives its labels. A bracket that closes on its line with no
-    colon and no quote inside holds no key that has a value, so it is text. Any other
-    form raises.
+    A plain one-line list gives its labels. A value that is, whole, one JSON object or
+    list is read by the JSON parser of the standard library, which reads an escaped key
+    too; the toolkit writes the record of an outcome in that form. A bracket that
+    closes on its line with no colon and no quote inside holds no key that has a value,
+    so it is text. Any other form raises.
     """
     if rest[0] == "[":
         items = _simple_list(rest)
         if items is not None:
             return items
+    try:
+        return _json_node(json.loads(rest, object_pairs_hook=_Mapping, parse_int=str, parse_float=str,
+                                     parse_constant=_not_json))
+    except (ValueError, RecursionError):
+        pass
     depth = 0
     for at, char in enumerate(rest):
         if char in "\"'":
@@ -756,18 +819,22 @@ def metadata_reason(text: str = ""):
     block = _metadata_lines(str(text or ""))
     if block is None:
         return None
-    lines, _closed = block
+    lines, plain = block
     if _flat_reading_excludes(lines):
         return "marked"
+    if not plain:
+        return "not_understood"
+    # Before the comment lines are set aside: a full parser ends a comment at a
+    # character that is odd here, and reads a key after it.
+    if _ODD_CONTROL.search("\n".join(lines)):
+        return "not_understood"
+    lines = [_ODD_SPACE.sub("_", line) for line in lines]
     content = [line for line in lines if not _no_content(line)]
     if not content:
         return None
-    if _ODD_CONTROL.search("\n".join(lines)) or any(
-            "\t" in line[:len(line) - len(line.lstrip(" \t"))] for line in lines):
+    if any("\t" in line[:len(line) - len(line.lstrip(" \t"))] for line in lines):
         return "not_understood"
-    first = content[0].strip()
-    if first[0] not in _KEY_STARTS and not _KEY_END.search(first):
-        # The block starts as prose: a rule line and words, not metadata.
+    if _starts_as_prose(content[0].strip()):
         return None
     reader = _BlockReader(lines)
     try:
@@ -794,19 +861,47 @@ def metadata_excludes(metadata) -> bool:
     return isinstance(metadata, dict) and _pairs_exclude(metadata.items())
 
 
-def metadata_text(value) -> str:
-    """One line of text as a metadata value that this reader understands.
+def holds_marked_block(text: str = "") -> bool:
+    """True when a metadata block that says "do not remember" opens on any line.
 
-    A writer of note metadata passes a title through here. Text that would read as a
-    list, a tag or an anchor is put in quotes, so the note that is written can be read.
+    For a text that comes in. A note that is pasted after a line of introduction, in a
+    code fence or with a margin still holds its own block between two `---` lines. Only
+    a block that is marked counts here: two rule lines around other words are ordinary
+    writing. A note that is typed again in another shape is not recognised; the policy
+    does not judge meaning.
     """
-    text = " ".join(str(value or "").split())
+    lines = re.split("\r\n|[" + _WIDE_BREAKS + "]", str(text or ""))
+    rules = [number for number, line in enumerate(lines) if _RULE_LINE.match(line)]
+    for start, end in zip(rules, rules[1:]):
+        margin = lines[start][:len(lines[start]) - len(lines[start].lstrip(" \t"))]
+        block = [line[len(margin):] if line.startswith(margin) else line for line in lines[start:end + 1]]
+        if metadata_reason("\n".join(block)) == "marked":
+            return True
+    return False
+
+
+def metadata_text(value) -> str:
+    """One line of text as a metadata value that this reader and a full parser read as text.
+
+    A writer of note metadata passes a title through here. Text that a parser would
+    read as something else (a list, a tag, an anchor, a key such as `Decision: use
+    this`, a comment after ` #`) is put in quotes, so the note that is written can be
+    read back here and in a note tool. A character that metadata cannot hold (a control
+    character, a byte order mark) becomes a space.
+    """
+    text = " ".join(_ODD_CONTROL.sub(" ", str(value or "")).split())
+    if not text:
+        return ""
     try:
-        understood = _BlockReader([]).value(text, 0) if text else ""
+        understood = _BlockReader([]).value(text, 0)
     except _NotUnderstood:
         understood = None
-    if isinstance(understood, str) or understood is _TEXT:
+    # `<<` and `=` are words of their own to a full parser.
+    if (understood == text and text[0] not in _KEY_STARTS and not _KEY_END.search(text)
+            and text not in ("<<", "=")):
         return text
+    if '"' not in text and "\\" not in text:
+        return '"' + text + '"'
     return "'" + text.replace("'", "''") + "'"
 
 
@@ -1203,11 +1298,17 @@ class RememberingPolicy:
         """Refuse a value on its way in.
 
         A string that comes in is a whole text: a note to save, a patch, a question. It
-        is judged with its own metadata block, so a private note that is pasted in is
-        not saved as an ordinary one.
+        is judged with its own metadata block, and with a marked block that opens on a
+        later line, so a private note that is pasted in is not saved as an ordinary one.
+        A block that is not read gets its own message, because the text may be ordinary.
         """
         if isinstance(value, str):
-            if value in self.state["forgotten"] or self.text_reason(value):
+            if value in self.state["forgotten"]:
+                raise PolicyError(EXCLUDED)
+            reason = metadata_reason(value)
+            if reason == "not_understood":
+                raise PolicyError(UNREAD_BLOCK)
+            if reason or holds_marked_block(value) or self.content_reason(value):
                 raise PolicyError(EXCLUDED)
         elif isinstance(value, (list, tuple)):
             for item in value:

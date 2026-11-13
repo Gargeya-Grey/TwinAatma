@@ -75,9 +75,10 @@ policy recognises as a credential is withheld; importing the same file twice add
 A source file whose own frontmatter marks it private is withheld whole. A note with a
 privacy key (such as `privacy` or `sensitivity`) is private unless its value is
 `ordinary`, `public`, `shared`, `open`, `normal`, `none` or `low`, or a plain no
-(`false`, `no`, `off`, `0`, `null`, empty). A note is also kept private when its
-frontmatter is in a form the toolkit does not read (a `{...}` mapping, a tag, an
-anchor): write plain `key: value` lines to share it. `doctor` counts both kinds. One run writes at
+(`false`, `no`, `off`, `0`, `null`, `~`, empty). A note is also kept private when its
+frontmatter is in a form the toolkit does not read (a `{...}` mapping with a value
+inside that is not JSON, a tag, an anchor): write plain `key: value` lines to share it. `doctor` counts
+both kinds, and `import` names each file it withholds for that reason. One run writes at
 most 500 new notes and drafts at most 12 rules. It says what is left, and the same command
 continues from there. A rule you rejected is not drafted again. A folder with more than
 200 text files is refused unless you pass `--many-files`.

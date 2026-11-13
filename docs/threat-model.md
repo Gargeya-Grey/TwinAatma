@@ -5,8 +5,8 @@ and which findings stop a release. A review of the code is read against this pag
 
 ## Why this page exists
 
-Three reviews in one day returned 7, 15 and 11 findings. A fourth and a fifth, read
-against this page, returned 6 and 7 inside the bar. Many were real. Many others
+Three reviews in one day returned 7, 15 and 11 findings. A fourth, a fifth and a sixth,
+read against this page, returned 6, 7 and 8 inside the bar. Many were real. Many others
 asked the product to resist an attacker that it cannot resist by design. With no
 stated limit, every review finds a new edge and every repair makes each request
 slower. October went the same way with a proof count. A review without a stated
@@ -17,7 +17,7 @@ threat has no end.
 | Protected | From | How |
 |---|---|---|
 | The profile (`People/Self.md`) | An assistant that calls the memory tools or writes files in the vault | Assistants only draft. Approval needs a real terminal. The approval record is signed and lives outside the vault. |
-| Notes marked private, credentials, forgotten text | Any assistant that reads memory | Every row is read from the note at the moment it is returned. The privacy rule refuses a value it does not know, and a metadata block it does not fully read. A private note that is pasted into a tool is not saved as an ordinary one. |
+| Notes marked private, credentials, forgotten text | Any assistant that reads memory | Every row is read from the note at the moment it is returned. The privacy rule refuses a value it does not know, and a metadata block it does not fully read. A text that comes into a tool is refused when it holds a marked metadata block, at its start or between two `---` lines further down. |
 | The assistant's behaviour | Text planted in a note or an import | Notes and imports are evidence, never instructions. An imported rule is only a draft. |
 | The search index | An agent that writes into the vault | The index is a cache. Each returned row is derived again from the file. |
 | The person's notes | The toolkit itself | Setup never overwrites a file. The hooks change no note. |
@@ -51,11 +51,16 @@ again. Nothing reaches the profile without a new decision in a terminal.
   profile by hand. The toolkit reports what it can no longer verify. It does not treat
   the person as an attacker.
 - **Every sensitive sentence.** The policy withholds what is marked and what it
-  recognises as a credential. It does not judge meaning.
+  recognises as a credential. It does not judge meaning. A private note that an
+  assistant already holds and types again in another shape (a summary, a quotation, a
+  table) is not recognised when it comes back in.
 - **Every YAML parser.** The privacy reader is checked against one full YAML parser
   (PyYAML) on blocks changed at random. A block that this parser refuses cannot be
   judged by the check. The reader's own rule still applies to it: a block that it does
-  not fully read keeps the note private.
+  not fully read keeps the note private. Metadata is the block that opens with `---` on
+  the first line that holds anything, which is where note tools look for it. A text
+  that opens another way has no metadata, also where a YAML parser would read its first
+  lines as a document.
 
 ## Release bar
 

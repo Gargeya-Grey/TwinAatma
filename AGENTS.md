@@ -91,9 +91,9 @@ the check first, so that it fails on the fault, then the code.
 |---|---|
 | A profile draft is not a note | `tests/test_draft_is_not_memory.py`: every tool is in a table, and every direct file list is named |
 | A note is shared only when its whole metadata block is read | `tests/test_privacy_yaml_oracle.py` (needs PyYAML; blocks changed at random against a full parser) and `tests/test_privacy_metadata_comments.py` |
-| The toolkit reads every file it writes; a saved fact is read back under any title | `tests/test_privacy_metadata_comments.py`, class `WhatTheToolkitWrites` |
-| A private note that is pasted in is not saved as an ordinary one | `tests/test_privacy_metadata_comments.py`, class `ANoteAboutPrivacy` |
-| Import never enters a link and names what it skips | `tests/test_import_memory.py` |
+| The toolkit reads every file it writes, and so does a full YAML parser; a saved fact is read back under any title | `tests/test_privacy_metadata_comments.py`, class `WhatTheToolkitWrites` (random titles, read back with both) |
+| A text that holds a marked metadata block, at its start or further down, is not saved as an ordinary note | `tests/test_privacy_metadata_comments.py`, class `ANoteAboutPrivacy` |
+| Import does not enter a link while it walks, and names what it skips or withholds | `tests/test_import_memory.py` |
 | A document names only tools that exist | `tests/test_docs.py` |
 
 Never run `setup-host --global` on the owner's machine without `--print`. It registers a

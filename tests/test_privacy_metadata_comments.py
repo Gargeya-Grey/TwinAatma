@@ -5,6 +5,7 @@ this code does not know withholds the note.
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 from support import TempVaultCase
@@ -270,6 +271,69 @@ class ANoteAboutPrivacy(TempVaultCase):
                  if "topaz beacon" in path.read_text(encoding="utf-8", errors="replace")]
         self.assertEqual(saved, [])
 
+    def test_a_private_note_pasted_after_other_words_is_not_saved(self):
+        from knowledgeos.indexer import iter_markdown
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        note = "---\nprivacy: private\n---\nThe rubellite meeting is on Tuesday.\n"
+        pasted = {
+            "after a line of introduction": "Here is the note to save:\n\n" + note,
+            "in a code fence": "Save this:\n\n```markdown\n" + note + "```\n",
+            "with a margin": "The note:\n\n" + "".join("    " + line + "\n" for line in note.splitlines()),
+            "with other line ends": "Here it is:\r\n\r\n" + note.replace("\n", "\r\n"),
+            "after a first block": "---\ntitle: Wrapper\n---\n\nIntro.\n\n" + note,
+        }
+        self.write("Concepts/Target.md", "---\ntitle: Target\ntype: concept\n---\n\nA plain target note.\n")
+        for form, text in pasted.items():
+            for tool, arguments in (
+                    ("memory_capture", {"title": "A copy", "content": text}),
+                    ("memory_propose_note_update", {"path_or_id": "Concepts/Target.md", "summary": "Add this",
+                                                    "patch_markdown": text})):
+                with self.subTest(form=form, tool=tool):
+                    answer = dispatch(MemoryAPI(self.vault), tool, arguments)
+                    self.assertIsNot(answer.get("ok"), True, answer)
+                    self.assertNotIn("rubellite", repr(answer))
+            with self.subTest(form=form, tool="the method"):
+                try:
+                    direct = self.api().capture("A copy by the method", text)
+                except Exception as error:  # noqa: BLE001 - a refusal may be raised or returned
+                    direct = {"refused": repr(error)}
+                self.assertIsNot(direct.get("ok"), True, direct)
+        saved = [path.name for path in iter_markdown(self.vault)
+                 if "rubellite" in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(saved, [])
+
+    def test_words_between_two_rule_lines_are_ordinary_writing(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        texts = {
+            "amber": "Agenda\n\n---\n\nFirst point: the amber meeting is on Tuesday.\n\n---\n\nSecond point.\n",
+            "violet": "---\n[My project notes](https://example.org)\n---\nPlease remember the violet meeting.\n",
+            "garnet": "---\n**Note:** the garnet desk is upstairs.\n---\nMore words.\n",
+            "citrine": "---\n> The citrine plan was quoted here.\n---\nMore words.\n",
+        }
+        for word, text in texts.items():
+            with self.subTest(word=word):
+                started = dispatch(MemoryAPI(self.vault), "memory_session_start", {"task_hint": text})
+                self.assertNotIn("error", started, started)
+                saved = dispatch(MemoryAPI(self.vault), "memory_capture", {"title": f"The {word} note", "content": text})
+                self.assertIs(saved.get("ok"), True, saved)
+                note = dispatch(MemoryAPI(self.vault), "memory_get_note", {"path_or_id": saved["path"]})
+                self.assertIn(word, str(note.get("body")), note)
+
+    def test_a_block_that_is_not_read_gets_its_own_message(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+        from knowledgeos.remembering import EXCLUDED, UNREAD_BLOCK
+
+        unread = dispatch(MemoryAPI(self.vault), "memory_capture",
+                          {"title": "A list", "content": "---\n- one\n- two\n---\nThe jasper words.\n"})
+        self.assertEqual((unread.get("ok"), unread.get("error")), (False, UNREAD_BLOCK), unread)
+        marked = dispatch(MemoryAPI(self.vault), "memory_capture",
+                          {"title": "A marked note", "content": "---\nprivacy: private\n---\nThe jasper words.\n"})
+        self.assertEqual((marked.get("ok"), marked.get("error")), (False, EXCLUDED), marked)
+        # The message for a marked text gives no advice on how to save it.
+        self.assertNotIn("without the block", EXCLUDED)
+
     def test_a_mapping_on_its_way_out_is_still_judged(self):
         policy = RememberingPolicy(self.vault)
         self.assertEqual(policy.scrub({"privacy": "private", "body": "x"}), "[Excluded by remembering policy]")
@@ -293,6 +357,11 @@ class WhatTheToolkitWrites(TempVaultCase):
         "teal": "It's a 'quoted' thing",
         "fawn": "[a, b]",
         "ebony": "> an arrow, | a bar and # a hash",
+        # Characters that metadata cannot hold. A sixth review saved a fact under the
+        # first of these titles and could not read it back.
+        "linen": "Meeting﻿notes",
+        "slate": "a\x00b\x1fc with control characters",
+        "birch": "line separated title\x85here",
     }
 
     def test_a_fact_saved_under_any_title_is_read_back(self):
@@ -322,11 +391,72 @@ class WhatTheToolkitWrites(TempVaultCase):
         started = dispatch(api, "memory_session_start", {"task_hint": "otter facts"})
         dispatch(api, "memory_session_end", {"session_id": started.get("session_id"),
                                              "summary": "[done] talked: about {otters} & more"})
+        # The record of an outcome is written into the metadata of the decision as JSON.
+        self.write("Decisions/Courier.md",
+                   "---\ntype: decision\nid: kos:decision:Courier\ntitle: Courier\nstatus: active\n"
+                   "outcome_status: pending\nreview_after: 2000-01-01\nupdated: 2026-10-18\n---\n# Trial\nA body.\n")
+        decision = api.get_note("Decisions/Courier.md")
+        recorded = dispatch(api, "memory_record_outcome",
+                            {"path": decision["path"], "expected_sha256": decision["sha256"],
+                             "outcome_status": "confirmed", "lesson": "Try a short pilot first: it's cheap",
+                             "actual_outcome": 'The pilot met "all six" deadlines: {on time} #1.'})
+        self.assertTrue(recorded.get("recorded"), recorded)
+        self.assertIn("outcome_recording: {", (self.vault / "Decisions/Courier.md").read_text(encoding="utf-8"))
         files = iter_markdown(self.vault)
         self.assertGreater(len(files), 2 * len(self.TITLES))
         withheld = {path.relative_to(self.vault).as_posix(): metadata_reason(path.read_text(encoding="utf-8"))
                     for path in files}
         self.assertEqual({path: reason for path, reason in withheld.items() if reason}, {})
+
+    def test_any_text_is_written_as_metadata_that_is_read(self):
+        import random
+
+        from knowledgeos.init_vault import _self_note
+        from knowledgeos.remembering import metadata_reason, metadata_text
+
+        pieces = ["privacy", "private", ": ", ":", " #", "#", "-", "- ", "?", "? ", "&a", "*a", "!", "!!str ", "{", "}",
+                  "[", "]", ",", "'", '"', "\\", "|", ">", "%", "@", "`", "<<", "---", "...", " ", "\t", "\n", "\r",
+                  "\x00", "\x0b", "\x0c", "\x1f", "\x7f", "\x85", "\xa0", " ", " ", "﻿", "a", "Z", "9",
+                  "é", "日本", "do_not_remember: true", "sensitive"]
+        try:
+            import yaml
+        except ImportError:  # the toolkit itself has no dependencies
+            yaml = None
+        rng = random.Random(20261113)
+        for number in range(4000):
+            text = "".join(rng.choice(pieces) for _ in range(rng.randint(0, 9)))
+            block = (f"---\ntitle: {metadata_text(text)}\n"
+                     f"description: {metadata_text('Inbox capture — ' + text)}\nstatus: draft\n---\n\nBody.\n")
+            if metadata_reason(block) is not None:
+                self.fail(f"case {number}: {text!r} was written as {block!r}")
+            if number < 400:
+                self.assertIsNone(metadata_reason(_self_note(text, "2026-11-13")), repr(text))
+            if yaml is not None:
+                # A note tool with a full parser reads the same words. The words are the
+                # text with each character that metadata cannot hold as a space.
+                words = " ".join(re.sub("[\x00-\x1f\x7f\x85  ﻿]", " ", text).split())
+                try:
+                    parsed = next(iter(yaml.safe_load_all(block)))
+                except Exception as error:  # noqa: BLE001
+                    self.fail(f"case {number}: {text!r} was written as {block!r}, which a full parser refuses: {error}")
+                self.assertEqual(parsed["description"], "Inbox capture — " + words if words else "Inbox capture —",
+                                 repr(text))
+                if isinstance(parsed["title"], str):
+                    self.assertEqual(parsed["title"], words, repr(text))
+
+    def test_a_note_proposal_that_could_not_be_read_back_is_not_written(self):
+        from knowledgeos.memory import MemoryAPI, dispatch
+
+        try:
+            self.write("Concepts/Ordinary note.md", "---\ntitle: Ordinary\ntype: concept\n---\n\nPlain words.\n")
+        except OSError:
+            self.skipTest("this file system refuses the name")
+        before = sorted(path.name for path in (self.vault / "Inbox").glob("*.md"))
+        answer = dispatch(MemoryAPI(self.vault), "memory_propose_note_update",
+                          {"path_or_id": "Concepts/Ordinary note.md", "summary": "Add a line",
+                           "patch_markdown": "One more line."})
+        self.assertIsNot(answer.get("ok"), True, answer)
+        self.assertEqual(sorted(path.name for path in (self.vault / "Inbox").glob("*.md")), before)
 
     def test_the_starter_templates_are_understood(self):
         from knowledgeos.remembering import metadata_reason

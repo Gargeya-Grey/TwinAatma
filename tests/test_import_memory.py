@@ -288,9 +288,42 @@ class ImportMemory(ImportCase):
         self.assertEqual(whole["profile_draft"], first["profile_draft"])
         draft = self.vault / first["profile_draft"]
         draft.write_text(draft.read_text(encoding="utf-8").replace(rule, "Something else."), encoding="utf-8")
-        changed = importer.import_path(self.api(), source, "Rules")
-        self.assertEqual(changed["drafts_not_checked"], 1, changed)
-        self.assertTrue(any("could not be checked" in problem for problem in changed["problems"]), changed)
+        plain = self.source("older-fact.md", "The older heron bridge opens in May.\n")
+        for name, run in (("a dry run", lambda: importer.import_path(self.api(), source, "Rules", dry_run=True)),
+                          ("a file with no rule", lambda: importer.import_path(self.api(), plain, "Facts")),
+                          ("the rule again", lambda: importer.import_path(self.api(), source, "Rules"))):
+            with self.subTest(run=name):
+                changed = run()
+                self.assertEqual(changed["drafts_not_checked"], 1, changed)
+                self.assertTrue(any("could not be checked" in problem for problem in changed["problems"]), changed)
+
+    def test_a_file_whose_metadata_is_not_read_is_named(self):
+        skill = ("---\nname: project-notes\ndescription: Records a project fact.\n"
+                 "metadata: {author: example-org, version: \"1.0\"}\n---\n\nThe topaz project launches on Friday.\n")
+        source = self.source("skill.md", skill)
+        report = importer.import_path(self.api(), source, "Skills", draft_profile=False)
+        self.assertEqual((report["imported"], report["withheld_by_policy"], report["metadata_not_read"]), (0, 1, 1),
+                         report)
+        told = [problem for problem in report["problems"] if "skill.md" in problem]
+        self.assertTrue(told and "plain `key: value` lines" in told[0], report["problems"])
+        # The advice works: the same file with plain lines is imported.
+        source.write_text(skill.replace('metadata: {author: example-org, version: "1.0"}',
+                                        'metadata:\n  author: example-org\n  version: "1.0"'), encoding="utf-8")
+        again = importer.import_path(self.api(), source, "Skills", draft_profile=False)
+        self.assertEqual((again["imported"], again["metadata_not_read"]), (1, 0), again)
+
+    def test_a_marker_after_a_rare_line_end_withholds_the_file(self):
+        from knowledgeos.indexer import iter_markdown
+
+        for name, text in (("nel", "--- # note\x85privacy: private\n---\nThe cinnamon desk is upstairs.\n"),
+                           ("ls", "--- privacy: private --- The cinnamon desk is upstairs.\n"),
+                           ("flow", "--- {privacy: private}\n---\nThe cinnamon desk is upstairs.\n")):
+            with self.subTest(form=name):
+                report = importer.import_path(self.api(), self.source(f"{name}.md", text), "Rare", draft_profile=False)
+                self.assertEqual((report["imported"], report["withheld_by_policy"]), (0, 1), report)
+        saved = [path.name for path in iter_markdown(self.vault)
+                 if "cinnamon" in path.read_text(encoding="utf-8", errors="replace")]
+        self.assertEqual(saved, [])
 
     def test_a_file_swapped_for_a_vault_file_after_the_check_is_not_read(self):
         inside = self.vault / "Inbox" / "old-plan.md"

@@ -11,6 +11,14 @@ piece cut out, a line moved or indented). The random part is what finds a form n
 thought of. With the reader of commit a0171e0 it finds a fault in about one block of
 seventy.
 
+The library is given the whole text of the note, with its opening and closing lines,
+and is asked for the first document. A sixth review found a fault in the opening line
+(`--- # note`, then a line separator that only a full parser honours, then the key),
+which an oracle that was handed the inside of the block could not see. So the opening
+line, the closing line and the text after it are changed at random too. Metadata is
+the block that opens with `---` on the first line that holds anything, which is where
+note tools look for it. A text that opens another way is not judged.
+
 The oracle below does not import the reader's key names or labels. It states the rule
 again from the documents. The YAML library is a tool of this test only, and the test is
 skipped where it is absent, so install PyYAML before a release run. A block that the
@@ -19,6 +27,7 @@ library refuses to parse cannot be judged and is counted, not failed.
 from __future__ import annotations
 
 import random
+import re
 import unittest
 
 try:
@@ -73,14 +82,27 @@ def note(block: str) -> str:
     return "---\n" + block + "\n---\n\nThe body.\n"
 
 
-def verdict(block: str) -> str:
-    """``"leak"``, ``"agree"``, ``"withheld"``, ``"no_parse"`` or ``"skip"`` for one block."""
-    if any(line.startswith(("---", "...")) for line in block.split("\n")):
-        return "skip"  # the line would end the block; the rest is the body
-    if marked_excluded(note(block)):
+def opens_metadata(text: str) -> bool:
+    """True when the first line that holds anything is a `---` line."""
+    for line in re.split("\r\n|[\r\n\x85  ]", text.lstrip("﻿")):
+        if line.strip():
+            return line.startswith("---") and line[3:4] in ("", " ", "\t")
+    return False
+
+
+def first_document(text: str):
+    """The first document of the text, as the library reads it."""
+    return next(iter(yaml.safe_load_all(text)), None)
+
+
+def verdict(text: str) -> str:
+    """``"leak"``, ``"agree"``, ``"withheld"``, ``"no_parse"`` or ``"skip"`` for one whole text."""
+    if not opens_metadata(text):
+        return "skip"  # the text does not open with a metadata block
+    if marked_excluded(text):
         return "withheld"
     try:
-        document = yaml.safe_load(block)
+        document = first_document(text)
     except Exception:  # noqa: BLE001 - any refusal of the library means "cannot be judged"
         return "no_parse"
     return "leak" if must_be_private(document) else "agree"
@@ -121,6 +143,17 @@ MARKED = [
     "title: x\nthird_party_sensitive: on",
     "privacy : private",
     "  privacy: private\n  title: x",
+    # A no-break space is no space to a full parser, so the first colon ends no key.
+    # The wider random hunt of the sixth review found this one.
+    "list:\xa0: \n  - -privacy: private",
+    "privacy\xa0: private",
+    "meta:\u3000x:\n  privacy: private",
+    # A value that is one JSON object or list is read with a JSON parser.
+    'meta: {"privacy":"private"}',
+    'meta: {"a":{"sensitive":true},"b":[1,2]}',
+    'meta: [{"do_not_remember":"yes"}]',
+    'outcome_recording: {"priv\\u0061cy":"team"}',
+    'meta: {"privacy":["public","private"]}',
 ]
 # Blocks with no marker, in the forms that note tools write. The reader shares these.
 ORDINARY = [
@@ -137,14 +170,60 @@ ORDINARY = [
     "title: A note\ntags:\n- one\n- two\nsensitive: no\nprivacy:",
     "title: A note # with a comment\n# a comment line\ntype: note",
     '"title": "A note"\n"type": "note"',
+    'title: A note\noutcome_recording: {"request_sha256":"ab12","status":"confirmed","version":1}',
+    'title: A note\nmeta: {"a": [1, 2], "b": null, "privacy": "public", "sensitive": false}',
 ]
+# Whole texts that a full parser reads as marked. The marker depends on the opening
+# line, the closing line or a line separator.
+MARKED_TEXTS = [
+    "--- # note\x85privacy: private\n---\nThe body.\n",
+    "---\x85privacy: private\x85---\x85The body.\n",
+    "--- privacy: private --- The body.\n",
+    "--- privacy: private --- The body.\n",
+    "--- {privacy: private}\n---\nThe body.\n",
+    # A comment line ends at the same characters. The random hunt found this one.
+    "---\n# c\x85privacy: private\n---\nThe body.\n",
+    "--- \n    # c meta: {\"priv\\u0061cy\":\"team\"}\n---\nThe body.\n",
+    "--- !!map\nprivacy: private\n---\nThe body.\n",
+    "---\n!!map\nprivacy: private\n---\nThe body.\n",
+    "---\n&a\nprivacy: private\n---\nThe body.\n",
+    "﻿---\nprivacy: private\n---\nThe body.\n",
+    "\n\n---\nprivacy: private\n---\nThe body.\n",
+    "---\r\nprivacy: private\r\n---\r\nThe body.\r\n",
+    "---\rprivacy: private\r---\rThe body.\r",
+    "---\ntitle: x\n ---\nprivacy: private\n---\nThe body.\n",
+    "---\ntitle:\n  ----\nprivacy: private\n---\nThe body.\n",
+    "--- \nprivacy: private\n...\nThe body.\n",
+]
+# Whole texts with no marker. A rule line and words are ordinary writing.
+ORDINARY_TEXTS = [
+    "--- # a comment\ntitle: A note\n---\nThe body.\n",
+    "---\r\ntitle: A note\r\ntags: [a, b]\r\n---\r\nThe body.\r\n",
+    "﻿---\ntitle: A note\n---\nThe body.\n",
+    "---\ntitle: A note\n...\nThe body.\n",
+    "---\n[My project notes](https://example.org)\n---\nPlease remember the violet meeting.\n",
+    "---\n**Note:** the desk is upstairs\n---\nMore words.\n",
+    "---\n> a quoted line\n---\nMore words.\n",
+    "---\nA line of words.\n---\nMore words.\n",
+    "---\n---\nprivacy: private\n---\nThe second block is the body.\n",
+]
+OPENINGS = ["---\n"] * 6 + ["--- \n", "--- # note\n", "---\r\n", "---\r", "---\x85", "--- ", "--- ",
+                           "﻿---\n", "\n\n---\n", "--- # c\x85", "--- # c ", "---\t\n", "--- >\n",
+                           "--- |\n", "--- !!map\n", "--- &a\n", "--- {", "--- [", "--- \n# c\n", "---\n\n"]
+CLOSINGS = ["\n---\n"] * 6 + ["\n...\n", "\n--- \n", "\n---\r\n", "\n--- # c\n", "\n", "\n ---\n", "\n---x\n",
+                             "\n----\n", "\x85---\x85", " --- ", "\n---", "}\n---\n", "]\n---\n"]
+TAILS = ["\nThe body.\n"] * 4 + ["privacy: private\n---\nThe body.\n", "\nprivacy: private\n",
+                                 "  privacy: private\n---\n", ""]
 TOKENS = ["&a ", "*a", "*a : ", "!!str ", "!!map ", "!x ", '"', "'", "\\u0061", "\\x70", "\\\n", "\n", "\n  ", "\n    ",
           "\n- ", "\n  - ", ": ", ":", " : ", "{", "}", "[", "]", ",", ", ", "? ", "\n? ", "\n: ", "|", ">", "|-", ">+",
           "|2", "#", " #", " # c\n", "<<: ", "<<: *a\n", "privacy", "private", "public", "do_not_remember", "true",
           "false", "sensitive", "yes", "no", "null", "~", " ", "  ", "\t", "\r\n", "\r", "-", "- ", "--", "%YAML 1.1\n",
           "privacy: private", "privacy: public", "\nprivacy: private", "\n  privacy: private", "{privacy: private}",
           "[privacy: private]", "a: ", "key: ", "\n\n", "''", '\\"', "\\", "@", "`", "!", "&", "*", "=", "\nprivacy:\n",
-          "memory_policy: exclude", "sensitivity: high", "0", "1", "y", " ", " ", "\x85", "﻿"]
+          "memory_policy: exclude", "sensitivity: high", "0", "1", "y", "\xa0", "\u2028", "\x85", "\ufeff",
+          "\u2029", "\x0b", "\x0c", "\n---\n", "\n...\n", "---", "...", "\u3000", "\u2003", ":\xa0",
+          "\xa0: ", "\n  - -", "- -", '{"privacy":"private"}', '{"a":1}', '":"', '","', '"privacy":',
+          '"sensitive":true', "\\u0070", '{"', '"}', "null", "true,"]
 
 
 def changed(rng: random.Random, block: str) -> str:
@@ -195,6 +274,22 @@ class KnownForms(unittest.TestCase):
             with self.subTest(block=block):
                 self.assertFalse(marked_excluded(note(block)))
 
+    def test_the_oracle_calls_each_marked_text_marked(self):
+        for text in MARKED_TEXTS:
+            with self.subTest(text=text):
+                self.assertTrue(opens_metadata(text))
+                self.assertTrue(must_be_private(first_document(text)))
+
+    def test_each_marked_text_keeps_the_note_private(self):
+        for text in MARKED_TEXTS:
+            with self.subTest(text=text):
+                self.assertTrue(marked_excluded(text))
+
+    def test_each_ordinary_text_is_shared(self):
+        for text in ORDINARY_TEXTS:
+            with self.subTest(text=text):
+                self.assertFalse(marked_excluded(text))
+
 
 @unittest.skipIf(yaml is None, "the YAML library is not installed")
 class ChangedAtRandom(unittest.TestCase):
@@ -206,14 +301,22 @@ class ChangedAtRandom(unittest.TestCase):
         counts = {"leak": 0, "agree": 0, "withheld": 0, "no_parse": 0, "skip": 0}
         for _ in range(self.ROUNDS):
             block = changed(rng, rng.choice(pool))
-            found = verdict(block)
+            # Two texts in three keep the plain lines around the block. The third gets an
+            # opening line, a closing line and a tail of its own, and one more change.
+            if rng.random() < 0.66:
+                text = note(block)
+            else:
+                text = rng.choice(OPENINGS) + block + rng.choice(CLOSINGS) + rng.choice(TAILS)
+                if rng.random() < 0.3:
+                    text = changed(rng, text)
+            found = verdict(text)
             counts[found] += 1
             if found == "leak":
-                self.fail(f"The reader shares a note that a full parser reads as marked:\n{block!r}\n"
-                          f"parsed: {yaml.safe_load(block)!r}")
-            if found == "agree" and len(pool) < 3000 and rng.random() < 0.05:
+                self.fail(f"The reader shares a note that a full parser reads as marked:\n{text!r}\n"
+                          f"parsed: {first_document(text)!r}")
+            if found == "agree" and text == note(block) and len(pool) < 3000 and rng.random() < 0.05:
                 pool.append(block)
-        # The hunt means nothing when most blocks are withheld or cannot be parsed.
+        # The hunt means nothing when most texts are withheld or cannot be parsed.
         self.assertGreater(counts["agree"], self.ROUNDS // 5, counts)
         self.assertGreater(counts["withheld"], self.ROUNDS // 10, counts)
 

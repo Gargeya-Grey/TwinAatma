@@ -273,6 +273,16 @@ def _asked_by_an_older_row(api: Any, row: dict[str, Any]) -> set[str] | None:
     return set(gate.asked_lines(body))
 
 
+def _older_drafts_not_checked(api: Any) -> int:
+    """The signed drafts from before 0.5 whose file is gone or was changed."""
+    from knowledgeos import gate
+
+    return sum(1 for row in gate.read_ledger(api.vault)[0]
+               if row.get("section") == "heuristics" and row.get("status") in _ASKED
+               and not isinstance(row.get("asked_lines"), list)
+               and _asked_by_an_older_row(api, row) is None)
+
+
 def _undrafted(api: Any, rules: list[str]) -> tuple[list[str], str | None, int]:
     """The rules the person has not been asked about yet.
 
@@ -320,11 +330,13 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
                               "paths": [], "profile_draft": None, "rules_left_for_next_run": 0,
                               "drafts_not_checked": 0, "dry_run": dry_run}
     # A draft file with no signed row (the signing state was lost, or the vault was
-    # restored without it) is history nobody can check. It is counted on every run, a
-    # dry run and a run with no rule too. It is never trusted.
+    # restored without it) is history nobody can check. So is an older signed draft
+    # whose file is gone or was changed. Both are counted on every run, a dry run and a
+    # run with no rule too. Neither is trusted.
     from knowledgeos import gate
 
-    report["drafts_not_checked"] = len(gate.untrusted_proposals(api.vault, api.proposals_dir))
+    report["drafts_not_checked"] = (len(gate.untrusted_proposals(api.vault, api.proposals_dir))
+                                    + _older_drafts_not_checked(api))
     rules: list[str] = []
     seen: set[str] = set()
     for item in items:
@@ -370,8 +382,7 @@ def import_items(api: Any, items: Iterable[Item], label: str, *, dry_run: bool =
     rules = list(dict.fromkeys(rules))
     report["rule_like_lines"] = len(rules)
     if rules and draft_profile and not dry_run:
-        rules, waiting, unchecked = _undrafted(api, rules)
-        report["drafts_not_checked"] += unchecked
+        rules, waiting, _unchecked = _undrafted(api, rules)
         report["rule_like_lines"] = min(len(rules), MAX_RULES)
         report["rules_left_for_next_run"] = max(0, len(rules) - MAX_RULES)
         rules = rules[:MAX_RULES]
@@ -413,6 +424,16 @@ def import_path(api: Any, path: Path, label: str | None = None, *, dry_run: bool
              for item in split_items(document.text, document.name, _marked_excluded(api, document.text))]
     report = import_items(api, items, label, dry_run=dry_run, draft_profile=draft_profile)
     report["files"] = len(documents)
+    from knowledgeos.remembering import metadata_reason
+
+    unread = [document.name or Path(path).name for document in documents
+              if metadata_reason(document.text) == "not_understood"]
+    report["metadata_not_read"] = len(unread)
+    if unread:
+        shown = ", ".join(unread[:5]) + (f" and {len(unread) - 5} more" if len(unread) > 5 else "")
+        problems.append(f"{len(unread)} file(s) were withheld because their metadata has a form that is not "
+                        f"read: {shown}. Write the metadata as plain `key: value` lines, without "
+                        "`{...}`, tags or anchors, and run the import again")
     if report["drafts_not_checked"]:
         problems.append(f"{report['drafts_not_checked']} earlier profile draft(s) could not be checked: the "
                         "draft file is gone or was changed, or the draft is not in the signed record. A rule "

@@ -2711,6 +2711,9 @@ class GateBoundaryTests(TempVaultCase):
             command,
             shell=True,
             cwd=str(self.vault),
+            # The hook reads its event from standard input. Without this it reads the
+            # test runner's own input, and waits for ever when that stays open.
+            stdin=_subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=180,
@@ -2770,6 +2773,7 @@ class GateBoundaryTests(TempVaultCase):
             commands[0],
             shell=True,
             cwd=str(self.vault),
+            stdin=_subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=180,

@@ -21,7 +21,8 @@ from typing import Any
 from knowledgeos.database import connect_database
 from knowledgeos.parser import parse_frontmatter, split_frontmatter
 from knowledgeos.self_model import SECTION_ALIASES, load_self
-from knowledgeos.remembering import RememberingPolicy, PolicyError, EXCLUDED, metadata_text, policy_boundary
+from knowledgeos.remembering import (RememberingPolicy, PolicyError, EXCLUDED, metadata_reason,
+                                     metadata_text, policy_boundary)
 
 SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._\- ]+")
 PROPOSAL_MODES = {"replace", "append"}
@@ -828,8 +829,9 @@ class MemoryAPI:
         with RememberingPolicy(self.vault).lock() as policy:
             policy.require_text("\n".join([title, content, *(tags or [])]), {"privacy": privacy})
             # The content alone too: with the title in front, a metadata block at the top
-            # of pasted text is no longer at the top.
-            policy.require_text(content)
+            # of pasted text is no longer at the top. `admit` also finds a marked block
+            # that opens after a line of introduction.
+            policy.admit(content)
             with file_lock(state_dir(self.vault) / "capture.lock", timeout=120):
                 return self._capture(title, content, tags, request_id)
 
@@ -871,10 +873,11 @@ class MemoryAPI:
         tags_yaml = "[" + ", ".join(tag_list) + "]"
         body = content.strip() or "_Captured via Memory API._"
         clean_title = _one_line(title) or "capture"
+        description = metadata_text(f"Inbox capture — {clean_title}")
         text = f"""---
 type: research
 title: {metadata_text(clean_title)}
-description: Inbox capture — {clean_title}
+description: {description}
 schema: knowledgeos-v0.2
 status: draft
 created: {today}
@@ -1020,10 +1023,12 @@ project:
         rel_target = self._rel(target)
         from knowledgeos.gate import _fenced
 
+        shown_title = metadata_text(f"Note proposal — {rel_target}")
+        description = metadata_text(f"Proposed update for {rel_target}")
         text = f"""---
 type: research
-title: Note proposal — {rel_target}
-description: Proposed update for {rel_target}
+title: {shown_title}
+description: {description}
 schema: knowledgeos-v0.2
 status: draft
 created: {today}
@@ -1044,6 +1049,11 @@ proposal_target: {rel_target}
 Manual apply: review and edit `{rel_target}` (auto-apply not enabled for notes in v1).
 This is a scratch draft you review; it is not a Self proposal and grants no access.
 """
+        if metadata_reason(text):
+            # The path is written as it is, so that the draft names its note. A path
+            # that metadata cannot hold would give a draft that nobody can read back.
+            return {"error": "cannot write the proposal: the path of the note holds a character that "
+                             "note metadata cannot hold"}
         try:
             self._write_exact(out, text)
         except OSError as exc:

@@ -153,11 +153,14 @@ tags: [moc]
 
 
 def _self_note(owner_name: str, today: str) -> str:
-    title = f"Self ({owner_name})" if owner_name and owner_name != "Self" else "Self"
+    from knowledgeos.remembering import metadata_text
+
+    title = metadata_text(f"Self ({owner_name})" if owner_name and owner_name != "Self" else "Self")
+    description = metadata_text(f"Ego node for {owner_name} — heuristics, values, anti-goals, active bets, drift.")
     return f"""---
 type: person
 title: {title}
-description: Ego node for {owner_name} — heuristics, values, anti-goals, active bets, drift.
+description: {description}
 id: kos:person:self
 schema: knowledgeos-v0.3
 status: active
