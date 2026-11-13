@@ -600,5 +600,5 @@ REQUIRED every meaningful chat:
 4) End of useful work: memory_session_end with a short summary.
 
 Never ask the user to run python/scripts/rebuild/validate. Speak only about their work — avoid product names unless asked.
-If soft_prompt is present in session_start, ask it once in plain language.
+If soft_prompt is present in session_start, say it once in plain language.
 """

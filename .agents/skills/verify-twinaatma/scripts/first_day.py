@@ -11,8 +11,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[4]
@@ -32,12 +34,14 @@ EXPORT = f"""# What my other assistant remembers about me
 - My API key is {SECRET} for the payments account.
 """
 FIRST_RUN_WORDS = "tell me a few things"
+REPLY_SECONDS = 300
 
 
 class Journey:
     def __init__(self, root: Path) -> None:
         self.root, self.vault = root, root / "vault"
         self.checks: list[dict] = []
+        self.servers: list[Server] = []
         self.env = dict(os.environ, PYTHONPATH=str(REPO), PYTHONUTF8="1",
                         KNOWLEDGEOS_STATE_DIR=str(root / "state"))
         self.env.pop("KNOWLEDGEOS_VAULT", None)
@@ -73,6 +77,9 @@ class Server:
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             env=journey.env, cwd=str(journey.root))
         self.sent = 0
+        self.lines: queue.Queue = queue.Queue()
+        threading.Thread(target=self._read, daemon=True).start()
+        journey.servers.append(self)
         self.rpc("initialize", {"protocolVersion": "2025-03-26", "capabilities": {},
                                 "clientInfo": {"name": "first-day", "version": "0"}})
 
@@ -81,14 +88,36 @@ class Server:
         message = {"jsonrpc": "2.0", "id": self.sent, "method": method, "params": params}
         self.proc.stdin.write((json.dumps(message) + "\n").encode("utf-8"))
         self.proc.stdin.flush()
-        return json.loads(self.proc.stdout.readline())
+        try:
+            line = self.lines.get(timeout=REPLY_SECONDS)
+        except queue.Empty:
+            self.stop()
+            raise TimeoutError(f"The server gave no reply to {method} in {REPLY_SECONDS} seconds; it was stopped.")
+        if not line:
+            self.stop()
+            raise RuntimeError(f"The server ended before it replied to {method}.")
+        return json.loads(line)
+
+    def _read(self) -> None:
+        for line in self.proc.stdout:
+            self.lines.put(line)
+        self.lines.put(b"")
 
     def tool(self, name: str, **arguments) -> dict:
         reply = self.rpc("tools/call", {"name": name, "arguments": arguments})
         return json.loads(reply["result"]["content"][0]["text"])
 
     def close(self) -> None:
-        self.proc.stdin.close()
+        try:
+            self.proc.stdin.close()
+            self.proc.wait(timeout=30)
+        finally:
+            self.stop()
+
+    def stop(self) -> None:
+        """Stop this exact child if it still runs, and wait for it."""
+        if self.proc.poll() is None:
+            self.proc.kill()
         self.proc.wait(timeout=30)
 
 
@@ -210,7 +239,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     root.mkdir(parents=True)
     journey = Journey(root)
-    run(journey)
+    try:
+        run(journey)
+    finally:
+        for server in journey.servers:
+            server.stop()
     failed = [row["check"] for row in journey.checks if not row["passed"]]
     (root / "report.json").write_text(json.dumps(
         {"checks": journey.checks, "failed": failed, "host_acceptance": "NOT CHECKED"}, indent=2) + "\n",

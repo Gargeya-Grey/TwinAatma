@@ -2029,7 +2029,7 @@ TOOL_SPECS = [
         "description": (
             "REQUIRED first tool every meaningful chat. Autopilot breath: refreshes the "
             "search index if stale, loads Self + relevant memory, runs light weekly evolution, "
-            "returns soft_prompt (ask once in plain language). User must never manage this."
+            "returns soft_prompt (say it once in plain language). User must never manage this."
         ),
         "inputSchema": {
             "type": "object",
