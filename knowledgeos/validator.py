@@ -84,9 +84,13 @@ def validate_vault(vault: Path | str) -> dict[str, Any]:
         if _is_conflict_copy(path):
             continue
         rel = path.relative_to(vault).as_posix()
-        notes.append(rel)
         text = path.read_text(encoding="utf-8", errors="replace")
         fm, body = split_frontmatter(text)
+        # Legacy starter guides have no frontmatter. A root README with a metadata
+        # block, or a README inside a note folder, must follow normal note validation.
+        if rel == "README.md" and body == text:
+            continue
+        notes.append(rel)
         links = extract_raw_links(body)
         is_template = _is_template(rel_parts)
 

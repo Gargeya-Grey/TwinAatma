@@ -2,6 +2,7 @@
 import argparse
 from collections import Counter
 import datetime
+import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -15,9 +16,17 @@ import time
 
 from data_preservation import DataRun, ROOT, inventory, sha
 
-PRODUCER = "verify-twinaatma.quality/v1"
-CORPUS = ROOT / "tests/fixtures/quality-v1.json"
-CORPUS_SHA256 = "787de4674bb0a51fceee87acb7ee7e9b8872068e1fab8af24de3e729bcbac379"
+PRODUCER = "verify-twinaatma.quality/v3"
+CORPUS = ROOT / "tests/fixtures/quality-v3.json"
+CORPUS_SHA256 = "b820bb51be43da5138afd47720e8254cc64c1ac4b0bd406dedfff531e9c9c358"
+CORPUS_ID = "quality-v3-20261023"
+LEGACY_CASE_IDS = (tuple("quality-v1-" + str(index).zfill(3) for index in range(1, 37))
+                   + tuple("fresh-held-" + str(index).zfill(2) for index in range(1, 37)))
+HELD_OUT_CASE_IDS = ('next-held-01', 'next-held-02', 'next-held-03', 'next-held-04', 'next-held-05', 'next-held-06', 'next-held-07', 'next-held-08', 'next-held-09', 'next-held-10', 'next-held-11', 'next-held-12', 'next-held-13', 'next-held-14', 'next-held-15', 'next-held-16', 'next-held-17', 'next-held-18', 'next-held-19', 'next-held-20', 'next-held-21', 'next-held-22', 'next-held-23', 'next-held-24', 'next-held-25', 'next-held-26', 'next-held-27', 'next-held-28', 'next-held-29', 'next-held-30', 'next-held-31', 'next-held-32', 'next-held-33', 'next-held-34', 'next-held-35', 'next-held-36')
+CASE_IDS = LEGACY_CASE_IDS + HELD_OUT_CASE_IDS
+NOTE_COUNT = 126
+LEGACY_CASES_SHA256 = "3f49556d80637c6676c574f32f5252a62ce265e8e2f352e025398c66959b8331"
+LEGACY_NOTES_SHA256 = "29acfa2768a877a2d3ba9df32b87cd840943d8e91b74c9fe7839d41f238348a8"
 SPLITS = ("development", "held_out")
 REQUIRED_CATEGORIES = {"natural_hint", "paraphrase", "contextual_preference", "changed_fact",
                        "multilingual", "ambiguous_names", "irrelevant_chatter", "unknown",
@@ -53,10 +62,14 @@ def note_path(value):
     return value
 
 
+def canonical_sha(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
 def validate_corpus(corpus):
     require(isinstance(corpus, dict) and corpus.get("schema_version") == "twinaatma.quality-corpus/v1",
             "Unknown corpus schema")
-    require(text(corpus.get("corpus_id")) and corpus.get("frozen_before_product_observation") is True
+    require(corpus.get("corpus_id") == CORPUS_ID and corpus.get("frozen_before_product_observation") is True
             and corpus.get("labels_observed_from_product") is False and text(corpus.get("label_provenance")),
             "Corpus must have pre-observation label provenance")
     subject = corpus.get("synthetic_subject", {})
@@ -66,13 +79,20 @@ def validate_corpus(corpus):
     require(contract.get("fixed_rubric_id") == "twinaatma-ideal-v1"
             and contract.get("fixed_outcome_count") == 54 and contract.get("source_top_k") == 8
             and contract.get("critical_expected_source_target") == 1
+            and contract.get("critical_expected_claim_target") == 1
             and contract.get("noncritical_expected_source_target") == 0.9, "Acceptance thresholds changed")
     require(contract.get("capture_policy", {}).get("status") == "UNAPPROVED"
             and contract["capture_policy"].get("release_acceptance") == "BLOCKED",
             "An assumed capture policy cannot become release acceptance")
     notes, cases, splits = corpus.get("notes"), corpus.get("cases"), corpus.get("splits")
-    require(isinstance(notes, list) and notes and isinstance(cases, list) and len(cases) >= 30,
-            "Corpus needs notes and at least 30 cases")
+    require(isinstance(notes, list) and len(notes) == NOTE_COUNT and isinstance(cases, list)
+            and all(isinstance(case, dict) for case in cases)
+            and [case.get("id") for case in cases] == list(CASE_IDS)
+            and splits == {"development": list(LEGACY_CASE_IDS), "held_out": list(HELD_OUT_CASE_IDS)},
+            "Frozen v3 requires its exact 108 cases, full note count and retired prior splits")
+    require(canonical_sha(cases[:72]) == LEGACY_CASES_SHA256
+            and canonical_sha(notes[:82]) == LEGACY_NOTES_SHA256,
+            "Legacy cases and notes must remain immutable except for development split")
     by_path = {}
     for note in notes:
         require(isinstance(note, dict), "Invalid note")
@@ -288,10 +308,10 @@ class QualityRun(DataRun):
         self.save("run-manifest.json", {"frozen_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
             "frozen_before_first_product_invocation": True, "producer": PRODUCER, "producer_sha256": self.producer_hash,
             "support_sha256": self.support, "corpus_path": CORPUS.relative_to(ROOT).as_posix(),
-            "corpus_sha256": self.corpus_hash, "corpus_summary": self.corpus_summary, "product_hashes": self.sources,
+            "corpus_id": CORPUS_ID, "corpus_sha256": self.corpus_hash, "corpus_summary": self.corpus_summary, "product_hashes": self.sources,
             "complete_note_inventory": self.expected_notes, "case_registry": [case["id"] for case in self.corpus["cases"]],
             "fixtures": {label: str(vault) for label, vault in self.fixtures.items()},
-            "held_out_status": "Process held out; labels inspectable; output must not tune queries, prompts, ranking or labels",
+            "held_out_status": "Process held out; fresh v3 slice only; all v2 cases retired to development; output must not tune queries, prompts, ranking or labels",
             "capture_policy_status": "UNAPPROVED", "acceptance_credit_awarded": False})
         self.prepared = True
 
@@ -377,7 +397,7 @@ class QualityRun(DataRun):
         valid_run = error is None and self.prepared and stable and stopped and complete and self.before == after
         retrieval = valid_run and all(metrics[split]["retrieval_target_met"] for split in (*SPLITS, "combined"))
         checks = [{"id": "quality.fixed_corpus", "verdict": "PASS" if valid_run else "FAIL",
-                   "expected": "A versioned pre-labeled diverse corpus with at least 30 cases and a held-out split",
+                   "expected": "The frozen 108-case v3 corpus preserves all 72 prior regressions and 36 fresh held-out cases",
                    "observed": self.corpus_summary, "evidence": ["run-manifest.json"]},
                   {"id": "quality.retrieval_target", "verdict": "PASS" if retrieval else "FAIL",
                    "expected": "Every critical source and literal critical claim; at least 90 percent noncritical sources in first eight",
@@ -385,7 +405,7 @@ class QualityRun(DataRun):
         report = {"producer": PRODUCER, "producer_sha256": self.producer_hash, "support_sha256": self.support,
             "source_root": str(ROOT), "revision": getattr(self, "revision", None), "platform": platform.platform(), "python": sys.version,
             "scope": "evaluation source-only startup MCP retrieval with a frozen synthetic corpus; no host answer judgment",
-            "corpus_path": CORPUS.relative_to(ROOT).as_posix(), "corpus_sha256": self.corpus_hash, "corpus_summary": self.corpus_summary,
+            "corpus_path": CORPUS.relative_to(ROOT).as_posix(), "corpus_id": CORPUS_ID, "corpus_sha256": self.corpus_hash, "corpus_summary": self.corpus_summary,
             "product_hashes": self.sources, "product_hashes_after": current, "product_and_producer_unchanged": stable,
             "checks": checks, "cases": self.cases, "metrics": metrics, "binding_checks": self.binding_checks,
             "verdict": "PASS" if valid_run and retrieval else "FAIL", "execution_complete": valid_run,

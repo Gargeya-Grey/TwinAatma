@@ -238,13 +238,29 @@ class RequestFreshnessTests(unittest.TestCase):
                 "belief_after: Prefer short cancellable trials before annual commitments\n---\n\nRecorded outcome.\n",
                 encoding="utf-8")
         save_state(self.vault, {"real_sessions": 3, "first_session_ts": time.time() - 4 * 86400})
-        result = dispatch(self.api, "memory_session_start", {"task_hint": "uncertain", "session_id": "drift-write-control"})
-        self.assertTrue(result.get("drift_tick", {}).get("proposed"), result)
-        proposals = list((self.vault / "People/Self-Proposals").glob("*.md"))
-        self.assertEqual(len(proposals), 1)
-        expected_path = proposals[0].relative_to(self.vault).as_posix()
-        actual_paths = [row["path"] for row in result["context"]["relevant"]["ranked"]]
-        self.assertIn(expected_path, actual_paths)
+        with self.api._request_scope():
+            result = dispatch(self.api, "memory_session_start", {"task_hint": "uncertain", "session_id": "drift-write-control"})
+            self.assertTrue(result.get("drift_tick", {}).get("proposed"), result)
+            proposals = list((self.vault / "People/Self-Proposals").glob("*.md"))
+            self.assertEqual(len(proposals), 1)
+            expected_path = proposals[0].relative_to(self.vault).as_posix()
+            # The write is in the index when startup ends. This looks at the index itself,
+            # before any other memory call, because a later call would bring a stale index
+            # up to date and hide a startup that did not.
+            with sqlite3.connect(self.api.db_path) as conn:
+                indexed = conn.execute("SELECT count(*) FROM notes WHERE path = ?", (expected_path,)).fetchone()[0]
+            conn.close()
+            self.assertEqual(indexed, 1)
+            # The draft is reached on purpose, in the same request: the list of drafts names it.
+            listed = dispatch(self.api, "memory_list_self_proposals")
+            self.assertIn(expected_path, json.dumps(listed))
+            found = dispatch(self.api, "memory_search", {"query": "Self proposal"})
+            self.assertNotIn(expected_path, json.dumps(found))
+        # Changed on 13 November 2026. This test used to require the new draft in the
+        # startup context. A draft that nobody decided is not a note: returned by a note
+        # route, an agent's own proposal reaches every assistant before the person
+        # approves it. `tests/test_draft_is_not_memory.py` holds every read tool to this.
+        self.assertNotIn(expected_path, [row["path"] for row in result["context"]["relevant"].get("ranked", [])])
 
 
 if __name__ == "__main__":

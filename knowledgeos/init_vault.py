@@ -11,6 +11,7 @@ Safety contract (see Decisions/self-gate-and-index-integrity.md):
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -96,6 +97,20 @@ class _Plan:
         self._write(dst, src.read_bytes())
 
 
+_TOOLKIT_DEV_BLOCK = re.compile(
+    rb"(?:\r?\n)*<!-- toolkit-dev:begin -->.*?<!-- toolkit-dev:end -->[ \t]*(?:\r?\n)?", re.DOTALL)
+
+
+def starter_contract(source: bytes) -> bytes:
+    """The agent contract a person's vault receives: the toolkit's own, minus its dev notes.
+
+    The repository root is both a vault and the toolkit's source, so its ``AGENTS.md``
+    also tells agents how to work on the toolkit. That part is not a person's concern.
+    """
+    stripped = _TOOLKIT_DEV_BLOCK.sub(b"\n" if b"\r\n" not in source else b"\r\n", source)
+    return stripped.rstrip(b"\r\n") + (b"\r\n" if b"\r\n" in source else b"\n")
+
+
 def _index_note(title: str, folder_desc: str, today: str) -> str:
     return f"""---
 type: index
@@ -138,11 +153,14 @@ tags: [moc]
 
 
 def _self_note(owner_name: str, today: str) -> str:
-    title = f"Self ({owner_name})" if owner_name and owner_name != "Self" else "Self"
+    from knowledgeos.remembering import metadata_text
+
+    title = metadata_text(f"Self ({owner_name})" if owner_name and owner_name != "Self" else "Self")
+    description = metadata_text(f"Ego node for {owner_name} — heuristics, values, anti-goals, active bets, drift.")
     return f"""---
 type: person
 title: {title}
-description: Ego node for {owner_name} — heuristics, values, anti-goals, active bets, drift.
+description: {description}
 id: kos:person:self
 schema: knowledgeos-v0.3
 status: active
@@ -430,10 +448,12 @@ def init_vault(
         plan.copy(example, target / "knowledgeos.config.example.json")
         plan.write(target / "knowledgeos.config.json", json.dumps(cfg, indent=2) + "\n")
 
-    for name in ("LICENSE", "AGENTS.md"):
-        src = source_root / name
-        if src.exists():
-            plan.copy(src, target / name)
+    license_file = source_root / "LICENSE"
+    if license_file.exists():
+        plan.copy(license_file, target / "LICENSE")
+    contract = source_root / "AGENTS.md"
+    if contract.exists():
+        plan._write(target / "AGENTS.md", starter_contract(plain_vault_path(source_root, contract).read_bytes()))
 
     src_rules = source_root / ".cursor" / "rules"
     if src_rules.exists():
@@ -527,7 +547,7 @@ Capture → Clarify → Connect → Decide → Execute → Record Outcome → Re
 2. Otherwise: talk to your agent — it will capture and propose Self updates
 
 ## Weekly (agent-initiated)
-Agents call `memory_ops_status` / session rituals. You only answer yes/no when asked.
+Agents call `memory_ops_status` / session rituals. You answer a short question when asked.
 """,
         ),
     )
@@ -568,7 +588,7 @@ vault, re-run `twinaatma setup-host --host cursor --write` from the new location
 
 ## Identity
 
-Edit [People/Self.md](People/Self.md) — or let the agent propose updates and say yes/no.
+Edit [People/Self.md](People/Self.md) — or let the agent draft a change, and decide it with `twinaatma self review`.
 
 Created: {today}
 """,
@@ -601,7 +621,7 @@ Assets/papers/
             f"cd {target}",
             "Wire MCP once: twinaatma setup-host --host cursor --write",
             "Open the vault in Cursor — hooks + AGENTS.md keep the twin autopilot alive",
-            "Chat normally — agents call memory_session_start; you only answer soft yes/no when asked",
+            "Chat normally — agents call memory_session_start; you answer a short question when asked",
         ],
     }
     if dry_run:
@@ -613,6 +633,32 @@ Assets/papers/
     cursor_cfg = build_config("cursor", target)
     plan.write(target / ".cursor" / "mcp.json", json.dumps(cursor_cfg, indent=2) + "\n")
     plan.write(target / "mcp.cursor.json", json.dumps(cursor_cfg, indent=2) + "\n")
+
+    # A later setup-host can reconnect unchanged generated files after a restore.
+    # Retain older proof on refresh, but never adopt an edited file as generated.
+    receipt = plain_vault_path(target, target / ".knowledgeos-init.json")
+    previous_files = {}
+    if receipt.exists():
+        try:
+            previous = json.loads(receipt.read_bytes()).get("generated_host_files", {})
+            if previous.get("version") == 1 and isinstance(previous.get("files"), dict):
+                previous_files = previous["files"]
+        except (ValueError, AttributeError):
+            pass
+    expected = {
+        ".cursor/mcp.json": json.dumps(cursor_cfg, indent=2) + "\n",
+        "mcp.cursor.json": json.dumps(cursor_cfg, indent=2) + "\n",
+    }
+    if rendered_hooks is not None:
+        expected[".cursor/hooks.json"] = rendered_hooks
+    generated_files = {}
+    for relative, text in expected.items():
+        path = plain_vault_path(target, target / relative)
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        if content == text.encode("utf-8") or previous_files.get(relative) == digest:
+            generated_files[relative] = digest
+    result["generated_host_files"] = {"version": 1, "files": generated_files}
 
     # Build the index and validate in-process so the new vault works without scripts/.
     from knowledgeos.indexer import rebuild_index

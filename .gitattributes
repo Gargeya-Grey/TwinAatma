@@ -1,3 +1,6 @@
 # Keep sealed verification inputs byte-identical on every checkout.
 tests/fixtures/quality-v1.json text eol=lf
+tests/fixtures/quality-v2.json text eol=lf
+tests/fixtures/quality-v3.json text eol=lf
 .agents/skills/verify-twinaatma/references/acceptance-rubric.json text eol=crlf
+*.sh text eol=lf

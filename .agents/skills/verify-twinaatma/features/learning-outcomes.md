@@ -46,38 +46,17 @@ Requested text must roundtrip exactly through the supported single-line note
 format. Unsupported control characters, quoted boolean/list-like literals and
 strings requiring unsupported quote escaping refuse without publishing a change.
 
-Verify public discovery, review, recording and exact replay in separate CLI/MCP
-processes. Compare the actual source hash and literal fields after restart. Require
-pending and reminder closure, current timeline attribution, stale-source refusal,
-native busy-index truthfulness and automatic recovery. Keep publication fault
-injection and concurrency tests as supporting evidence. Snapshot Self and all
-preexisting proposals before and after. Do not invoke approval in this journey.
-Source command proof leaves ordinary host behavior and the fixed 54-outcome
-readiness criteria unchanged.
+## What checks it
 
-## Source decision and lesson proof
+Preconditions: synthetic decisions with known pending and closed states, dates, sources and lessons. Run one suite with `python -B -m unittest discover -s tests -p <file>`.
 
-Use [the source learning recipe](../references/source-learning.md) for the twelve-case
-`learning.py` journey and strict `--learning-report` adapter. It retains literal
-source states, original MCP wire, a live SQLite holder, unchanged toolkit and
-identity bytes, and the unapproved source-linked draft. Exact project precision
-and attributed lessons receive separate verdicts. Use [the longitudinal source recipe](../references/source-longitudinal.md) for
-27 frozen formatting, semantic-evidence, signed rejection and new-source cases.
-Its independent `--longitudinal-report` grader covers only semantic drift and
-rejection recurrence. Source proof leaves the host outcome loop, representative
-elapsed use and owner approval unresolved.
+- Outcome recording. `tests/test_outcome_recording.py`: discovery, review, recording and an exact retry; the source hash and literal fields; pending and reminder closure; refusal of a stale or protected source; a truthful answer while the index is busy.
+- Decision views and review timing. `tests/test_followup_review.py` and `tests/test_project_precision.py`: an old decision with blank outcome metadata asks for no review, an explicit pending outcome or a due date does, and rows that were already asked leave the queue before it is cut.
+- Lessons and drift. `tests/test_evidence_learning.py` and class `LearningEvidenceTests` in `tests/test_learning_repairs.py`: a proposal needs two distinct completed sources and names them with its uncertainty; formatting churn is no evidence; a rejected proposal does not return without a new completed source.
+- Identity. Each of these suites leaves Self unchanged. No check invokes approval.
 
-## Driving it with MCP and longitudinal chats
-
-Preconditions: seed synthetic decisions with known pending/closed states, dates, sources, and lessons. Keep meaningful changes separate from mechanical edits.
-
-- Decision views. Call `memory_decisions`, `memory_pending_outcomes`, and `memory_timeline` through MCP. Edit a decision externally, including during a frozen index, and require current metadata and honest completeness indicators.
-- Review timing. An old decision with blank outcome metadata stays searchable without automatically asking the person to review it. An explicit pending outcome is eligible without a date; a valid due ISO date also establishes review intent. Future or malformed dates and completed outcomes are ineligible. Verify that already asked rows are removed before the bounded queue is selected, so a ninth due decision can still be reached. Unreported results stay unknown.
-- Outcome loop. Share an outcome in an ordinary host chat. Require the assistant to associate it with the right decision, preserve uncertainty, and stop asking about a completed outcome. A note-update proposal awaiting manual application does not establish an automatic closed loop.
-- Lesson. Call `memory_propose_from_lesson` for the completed synthetic decision. Require a source-linked proposal. Keep Self unchanged until independent owner approval.
-- Drift discrimination. Reformat and retimestamp a synthetic corpus without changing meaning. Run ordinary session starts across the cadence fixture. Require no asserted identity change. Then supply corroborated old/new beliefs and require a proposal that names both, cites evidence, and expresses uncertainty.
-- Rejection. Reject the proposal through `memory_reject_self_update`. Repeat unchanged evidence. Require no equivalent new suggestion unless the reminder/reconsideration policy allows it and new evidence is named.
+Not checked by any script: an outcome shared in an ordinary host chat and tied to the right decision, and a week of real use. The driver for each was removed on 13 November 2026; the last commit that holds it is `69bec1e`.
 
 ## Gotchas
 
-Activity counts alone still establish no belief change. The integrated source can propose an attributed, explicitly uncertain change from matching before/after claims and lessons in at least two distinct completed decision sources with distinct outcome narratives. This is a conservative engineering threshold, not an owner-approved universal rule for identity. The signed proposal history suppresses recurrence on unchanged, renamed, rekeyed or copied evidence; inconsistent or unavailable history refuses. Fixed-outcome credit requires complete current-byte longitudinal observations through their strict adapter; host proof remains separate. Timed fixture state cannot replace a week of actual host behavior. Outcome completion requires the exact reviewed source mutation, not merely a populated pending list. Every resulting identity change remains unapproved until the owner independently uses their terminal.
+Activity counts alone still establish no belief change. The integrated source can propose an attributed, explicitly uncertain change from matching before/after claims and lessons in at least two distinct completed decision sources with distinct outcome narratives. This is a conservative engineering threshold, not an owner-approved universal rule for identity. The signed proposal history suppresses recurrence on unchanged, renamed, rekeyed or copied evidence; inconsistent or unavailable history refuses. Timed fixture state cannot replace a week of actual host behavior. Outcome completion requires the exact reviewed source mutation, not merely a populated pending list. Every resulting identity change remains unapproved until the owner independently uses their terminal.

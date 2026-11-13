@@ -171,7 +171,7 @@ class RememberingPolicyTests(unittest.TestCase):
         state = self.vault / ".knowledgeos/remembering-policy.json"
         sentinel = self.root / "ledger-sentinel"
         sentinel.write_bytes(b"unchanged sentinel")
-        state.hardlink_to(sentinel)
+        os.link(sentinel, state)
         result = self.api.get_note(allowed["path"])
         self.assertTrue(result.get("error"), "hardlinked policy state did not fail closed")
         self.assertTrue(sentinel.read_bytes() == b"unchanged sentinel", "linked state changed its protected source")

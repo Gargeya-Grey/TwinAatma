@@ -55,16 +55,112 @@ def _fts_query(raw: str) -> str:
     return " AND ".join(f'"{t}"' for t in cleaned[:12])
 
 
+_CONTEXT_SCAFFOLDING = _QUESTION_STOP_WORDS | {
+    "s", "am", "as", "but", "by", "if", "then", "than", "into", "up", "out",
+    "its", "there", "some", "any", "all", "more", "most", "very", "only",
+    "each", "such", "these", "those", "their", "them", "also", "just", "so",
+}
+# Reciprocal-rank constant for merging substring hits into the bm25 order.
+_FUSION_K = 60
+# Extra candidates fetched so that dropping navigation pages still leaves a full answer.
+_SCAFFOLD_POOL = 16
+_CONCEPT_INDEX: dict[str, tuple[int, ...]] | None = None
+
+
+def _fold(word: str) -> str:
+    """Casefold, and drop accents from Latin words, so "japonés" finds "japones"."""
+    word = unicodedata.normalize("NFC", word.casefold())
+    plain = "".join(ch for ch in unicodedata.normalize("NFKD", word) if not unicodedata.combining(ch))
+    return plain if plain.isascii() else word
+
+
+def _lookup_keys(word: str) -> list[str]:
+    """The word, then its regular English base forms ("dinners" -> "dinner")."""
+    key = _fold(word)
+    keys = [key]
+    if key.isascii() and " " not in key:
+        for suffix, replacement in (("ies", "y"), ("es", ""), ("s", ""), ("ing", ""),
+                                    ("ing", "e"), ("ed", ""), ("ed", "e")):
+            if key.endswith(suffix) and len(key) - len(suffix) >= 3:
+                keys.append(key[: len(key) - len(suffix)] + replacement)
+    return keys
+
+
+def _concept_index() -> dict[str, tuple[int, ...]]:
+    global _CONCEPT_INDEX
+    if _CONCEPT_INDEX is None:
+        from knowledgeos.concepts import CLUSTERS
+
+        index: dict[str, list[int]] = {}
+        for number, cluster in enumerate(CLUSTERS):
+            for entry in cluster:
+                index.setdefault(_fold(entry), []).append(number)
+        _CONCEPT_INDEX = {key: tuple(numbers) for key, numbers in index.items()}
+    return _CONCEPT_INDEX
+
+
+def _context_terms(raw: str) -> list[str]:
+    return list(dict.fromkeys(token.lower() for token in _tokens(raw)
+                              if token.lower() not in _CONTEXT_SCAFFOLDING))[:24]
+
+
+def _concept_expansions(raw: str) -> list[str]:
+    """Other words for the task's own concepts: synonyms and translations.
+
+    A note often says the same thing in other words ("dinner" and "food") or in
+    another language ("coffee" and "Kaffee"), and FTS only matches the words given.
+    """
+    from knowledgeos.concepts import CLUSTERS
+
+    index = _concept_index()
+    words = [token.lower() for token in _tokens(raw)]
+    content = [word for word in words if word not in _CONTEXT_SCAFFOLDING]
+    own = {_fold(word) for word in content}
+    clusters: list[int] = []
+    for word in content + [f"{first} {second}" for first, second in zip(words, words[1:])]:
+        for key in _lookup_keys(word):
+            if key in index:
+                clusters.extend(index[key])
+                break
+    expansions: list[str] = []
+    for number in dict.fromkeys(clusters):
+        for entry in CLUSTERS[number]:
+            if _fold(entry) not in own and entry not in expansions:
+                expansions.append(entry)
+    return expansions[:120]
+
+
+def _context_parts(raw: str) -> tuple[list[str], list[str], list[str]]:
+    """FTS clauses for the task's words, FTS clauses for expansions, substring terms.
+
+    Expansions in scripts FTS cannot segment (CJK, kana, hangul) are matched as
+    substrings, the same way `blended_search` answers such a query.
+    """
+    lexical: list[str] = []
+    for term in _context_terms(raw):
+        lexical.append(f'"{term}"')
+        # Porter stems "explain" and "explanation" differently, so a long word also
+        # matches by its first five letters.
+        if len(term) >= 6 and term.isalpha():
+            lexical.append(f'"{term[:5]}"*')
+    expansion: list[str] = []
+    substrings: list[str] = []
+    for entry in _concept_expansions(raw):
+        if _needs_substring_fallback(entry):
+            substrings.append(entry)
+        else:
+            expansion.append(f'"{entry}"')
+    return lexical, expansion, substrings[:8]
+
+
 def _context_query(raw: str) -> str:
     """Find candidate memories for a task, rather than require its every word."""
-    scaffolding = _QUESTION_STOP_WORDS | {
-        "s", "am", "as", "but", "by", "if", "then", "than", "into", "up", "out",
-        "its", "there", "some", "any", "all", "more", "most", "very", "only",
-        "each", "such", "these", "those", "their", "them", "also", "just", "so",
-    }
-    terms = dict.fromkeys(token.lower() for token in _tokens(raw)
-                          if token.lower() not in scaffolding)
-    return " OR ".join(f'"{term}"' for term in list(terms)[:24]) or '""'
+    lexical, expansion, _substrings = _context_parts(raw)
+    return " OR ".join(lexical + expansion) or '""'
+
+
+def _context_substrings(raw: str) -> list[str]:
+    return _context_parts(raw)[2]
 
 
 def _like(raw: str) -> str:
@@ -93,6 +189,97 @@ def _needs_substring_fallback(query: str) -> bool:
         if 0x1F000 <= code <= 0x1FAFF:  # emoji
             return True
     return False
+
+
+def _fts_rows(conn: sqlite3.Connection, match: str, limit: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT path, title,
+               snippet(notes_fts, 2, '«', '»', '…', 16) AS snippet,
+               bm25(notes_fts) AS rank
+        FROM notes_fts
+        WHERE notes_fts MATCH ?
+        ORDER BY rank
+        LIMIT ?
+        """,
+        (match, limit),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _context_rows(conn: sqlite3.Connection, query: str, limit: int) -> list[dict[str, Any]]:
+    """Rank a task's words and their concept expansions together, by bm25.
+
+    One query, so a rare exact word still outweighs a common expansion. Expansions in
+    scripts FTS cannot segment are found by substring; that list has no bm25 order, so
+    it is merged by reciprocal rank. Without it the order is plain bm25.
+    """
+    lexical, expansion, substrings = _context_parts(query)
+    pool = max(limit * 2, 16)
+    rows = _fts_rows(conn, " OR ".join(lexical + expansion) or '""', pool)
+    if not substrings:
+        return rows[:limit]
+    where = " OR ".join("f.body LIKE ? ESCAPE '\\' OR f.title LIKE ? ESCAPE '\\'" for _ in substrings)
+    params: list[Any] = [value for term in substrings for value in (_like(term), _like(term))]
+    found = [dict(row) for row in conn.execute(
+        f"SELECT f.path, f.title, substr(f.body, 1, 160) AS snippet, 0.0 AS rank "
+        f"FROM notes_fts f WHERE {where} LIMIT ?",
+        (*params, pool),
+    ).fetchall()]
+    fused: dict[str, dict[str, Any]] = {}
+    for ranked in (rows, found):
+        for position, row in enumerate(ranked, 1):
+            entry = fused.setdefault(row["path"], {"row": row, "score": 0.0})
+            entry["score"] += 1.0 / (_FUSION_K + position)
+    ordered = sorted(fused.values(), key=lambda entry: (-entry["score"], entry["row"]["path"]))
+    return [dict(entry["row"], rank=-entry["score"]) for entry in ordered[:limit]]
+
+
+# Pages a vault uses to find its way around. They describe the vault, not the person,
+# so they are not offered as an answer to a task or a plain question. A search that
+# names one on purpose still finds it.
+_SCAFFOLD_TYPES = {"moc", "index", "template"}
+# A profile draft the person has not decided is a claim about them, not a memory of
+# them. Offering it as context would let a draft act as a rule before it is approved.
+_UNDECIDED_DRAFTS = "People/Self-Proposals/"
+_POSSIBLY_RELATED_NOTE = (
+    "No note contains every word of this query, so `ranked` is empty. The notes in "
+    "`possibly_related` contain some of its words or close ones. Read one before you rely "
+    "on it, and say so when none of them answers the question."
+)
+
+
+def is_undecided_draft(path: str) -> bool:
+    """True for a file in the profile-draft folder, in any spelling of its name.
+
+    A draft is not a note. No route that returns notes returns one: `MemoryAPI._refresh_rows`
+    drops it, and `tests/test_draft_is_not_memory.py` asks every read tool. A draft is
+    reached on purpose, by `memory_list_self_proposals` or by its own path.
+    """
+    return path.replace("\\", "/").casefold().startswith(_UNDECIDED_DRAFTS.casefold())
+
+
+def _is_scaffold(path: str, note_type: str) -> bool:
+    # Compared without case: on Windows `templates/` is the same folder as `Templates/`.
+    folded = path.replace("\\", "/").casefold()
+    kind = (note_type or "").strip().lower()
+    if kind == "template" or folded.startswith("templates/") or is_undecided_draft(path):
+        return True
+    # A map or an index is a starter page only under a name `init` and the toolkit
+    # write: one that starts with `_` (`_Index.md`, `_MOC_Master.md`), or the vault's
+    # own `README.md`. A map the person wrote under a name of their own is memory.
+    # `tests/test_draft_is_not_memory.py` holds a new vault to this rule.
+    return kind in _SCAFFOLD_TYPES and (folded.rsplit("/", 1)[-1].startswith("_") or folded == "readme.md")
+
+
+def without_scaffold(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop navigation pages and undecided drafts from rows offered as context.
+
+    Every way a row can reach task context goes through this: full-text hits, the
+    metadata buckets, the substring fallback, and the rows re-read from the files.
+    """
+    return [row for row in rows
+            if not _is_scaffold(str(row.get("path") or ""), str(row.get("type") or ""))]
 
 
 def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool = False) -> dict[str, Any]:
@@ -155,25 +342,19 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         results["fts_error"] = str(exc)
 
     if fts_available:
-        fts_q = _context_query(query) if context else _fts_query(query)
         try:
-            rows = conn.execute(
-                """
-                SELECT path, title,
-                       snippet(notes_fts, 2, '«', '»', '…', 16) AS snippet,
-                       bm25(notes_fts) AS rank
-                FROM notes_fts
-                WHERE notes_fts MATCH ?
-                ORDER BY rank
-                LIMIT ?
-                """,
-                (fts_q, limit),
-            ).fetchall()
+            if context:
+                rows = _context_rows(conn, query, limit + _SCAFFOLD_POOL)
+            else:
+                rows = _fts_rows(conn, _fts_query(query), limit)
             for r in rows:
                 meta = conn.execute(
                     "SELECT type, status, entity_id FROM notes WHERE path = ?",
                     (r["path"],),
                 ).fetchone()
+                if context and (
+                        len(fts_hits) >= limit or _is_scaffold(r["path"], meta["type"] if meta else "")):
+                    continue
                 fts_hits.append(
                     {
                         "title": r["title"],
@@ -221,6 +402,11 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         except sqlite3.OperationalError as e:
             results["fts_error"] = str(e)
 
+    if context:
+        # A draft or a map page whose title matches the task is still not memory.
+        fts_hits = without_scaffold(fts_hits)
+        for name in meta_sections:
+            results[name] = without_scaffold(results[name])
     results["fts"] = fts_hits
     results["fts_available"] = fts_available
 
@@ -247,6 +433,32 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
                 }
     ranked = sorted(blended.values(), key=lambda x: (-x["score"], x["rank"], x.get("title") or "", x["path"]))
     results["ranked"] = ranked[:limit]
+    # A direct search answers only with notes that hold every word: a wrong note offered
+    # as the answer is worse than none. A plain question rarely repeats a note's words,
+    # though, so when the answer is empty the notes task context would find are offered
+    # in their own labelled list, never mixed into the answer.
+    possibly_related: list[dict[str, Any]] = []
+    if fts_available and not context and not ranked and not _needs_substring_fallback(query):
+        try:
+            for r in _context_rows(conn, query, limit + _SCAFFOLD_POOL):
+                if len(possibly_related) >= limit:
+                    break
+                meta = conn.execute(
+                    "SELECT type, status, entity_id FROM notes WHERE path = ?", (r["path"],),
+                ).fetchone()
+                if _is_scaffold(r["path"], meta["type"] if meta else ""):
+                    continue
+                possibly_related.append({
+                    "title": r["title"],
+                    "path": r["path"],
+                    "type": (meta["type"] if meta else ""),
+                    "status": (meta["status"] if meta else ""),
+                    "entity_id": (meta["entity_id"] if meta else ""),
+                    "snippet": (r["snippet"] or "")[:400],
+                    "rank": r["rank"],
+                })
+        except sqlite3.OperationalError:
+            possibly_related = []
     conn.close()
     try:
         from knowledgeos.memory import MemoryAPI
@@ -255,6 +467,16 @@ def blended_search(db_path: Path, query: str, limit: int = 20, *, context: bool 
         for key, rows in list(results.items()):
             if isinstance(rows, list) and rows and isinstance(rows[0], dict):
                 results[key] = api._refresh_rows(rows, query, context=context)
+                if context:
+                    # Again after the refresh: the file, not the index, says what a note is.
+                    results[key] = without_scaffold(results[key])
+        if possibly_related:
+            # Found the way task context finds notes, so re-tested against the files the
+            # same way.
+            possibly_related = without_scaffold(api._refresh_rows(possibly_related, query, context=True))
+        if possibly_related:
+            results["possibly_related"] = possibly_related
+            results["possibly_related_note"] = _POSSIBLY_RELATED_NOTE
         return RememberingPolicy(db_path.parent).release(results)
     except PolicyError as error:
         return refusal(error)

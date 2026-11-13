@@ -13,7 +13,7 @@ from knowledgeos.memory import MemoryAPI
 from knowledgeos.parser import parse_frontmatter
 from knowledgeos.self_model import load_self
 from knowledgeos.data_ops import write_generated
-from knowledgeos.indexer import iter_markdown
+from knowledgeos.indexer import iter_notes
 from knowledgeos.remembering import RememberingPolicy
 
 
@@ -105,7 +105,7 @@ def find_tensions(api: MemoryAPI) -> list[dict[str, Any]]:
 
     # 1) Frontmatter supersedes/invalidates pointing at existing notes
     policy = RememberingPolicy(vault)
-    for path in iter_markdown(vault):
+    for path in iter_notes(vault):
         if any(p in path.parts for p in (".git", "Templates", "node_modules")):
             continue
         try:

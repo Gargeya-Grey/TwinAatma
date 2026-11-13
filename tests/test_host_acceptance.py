@@ -124,4 +124,37 @@ class NativeTomlMergeTests(unittest.TestCase):
         self.assertTrue(result.startswith(original))
         self.assertEqual(merge(result, server), result)
 
+    def test_an_env_value_that_is_not_text_is_refused(self):
+        from knowledgeos.codex_config import UnsafeToml, merge
+        server = {"command": "new", "args": ["mcp"], "cwd": "vault", "env": {"KEY": "value"}}
+        original = '[mcp_servers.knowledgeos]\ncommand = "old"\nenv = {RETRIES = 3}\n'
+        with self.assertRaisesRegex(UnsafeToml, "env must contain strings"):
+            merge(original, server)
+
+
+class ExistingProjectConfig(TempVaultCase):
+    """What setup does with a project config file that it cannot merge, and where it finds the vault."""
+
+    def test_an_owned_entry_that_is_not_an_object_is_refused_and_kept(self):
+        from knowledgeos import host_setup
+        target = self.vault / ".cursor" / "mcp.json"
+        target.parent.mkdir(exist_ok=True)
+        for owned in ('"text"', '{"env": []}'):
+            with self.subTest(owned=owned):
+                before = ('{"mcpServers": {"knowledgeos": ' + owned + '}}').encode("utf-8")
+                target.write_bytes(before)
+                with self.assertRaisesRegex(host_setup.InvalidHostConfig, "must be JSON objects"):
+                    host_setup.write_config("cursor", self.vault)
+                self.assertEqual(target.read_bytes(), before)
+
+    def test_the_vault_named_in_the_environment_is_used_outside_a_vault(self):
+        from unittest import mock
+        from knowledgeos.vault_resolve import resolve_vault
+        elsewhere = self.root / "not-a-vault"
+        elsewhere.mkdir()
+        with mock.patch.dict(os.environ, {"KNOWLEDGEOS_VAULT": str(self.vault)}):
+            self.assertEqual(resolve_vault(None, cwd=elsewhere), self.vault.resolve())
+        with mock.patch.dict(os.environ, {"KNOWLEDGEOS_VAULT": str(elsewhere)}):
+            self.assertNotEqual(resolve_vault(None, cwd=elsewhere), self.vault.resolve())
+
 if __name__ == "__main__": unittest.main()

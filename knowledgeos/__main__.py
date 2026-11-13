@@ -43,6 +43,16 @@ def _run_hook(name: str, argv: list[str]) -> int:
     import os
     import runpy
 
+    if name == "claude-code":
+        from knowledgeos.claude_hook import main as claude_hook
+
+        # Claude Code sends and reads UTF-8, whatever the console code page is.
+        for stream in (sys.stdin, sys.stdout):
+            try:
+                stream.reconfigure(encoding="utf-8")
+            except (AttributeError, OSError, ValueError):
+                pass
+        return claude_hook(argv)
     if name not in {"twin_session_start", "twin_session_end"}:
         print(f"hook: unknown hook {name!r}", file=sys.stderr)
         return 2
@@ -128,12 +138,14 @@ def main(argv: list[str] | None = None) -> int:
             "Commands:\n"
             "  init <path>           Create a starter vault (--dry-run, --force)\n"
             "  mcp                   Start MCP Memory server (stdio)\n"
-            "  setup-host            Write/print an MCP host config (--write, --print)\n"
+            "  setup-host            Connect a host (--global for every project, --write, --print)\n"
             "  doctor                Environment and vault diagnostics\n"
             "  validate              Validate vault schema\n"
             "  ids assign [--write]  Assign kos:<type>:<slug> IDs (dry-run default)\n"
             "  self summary          Parse People/Self.md ego node\n"
+            "  import <file|folder>  Bring in memory from another assistant or agent files\n"
             "  self pending          List Self proposals waiting for you\n"
+            "  self review           Decide every waiting proposal in one sitting (needs a terminal)\n"
             "  self approve <file>   Read a proposal and apply it (needs a terminal)\n"
             "  memory <tool>         Call Memory API tools (CLI fallback for MCP)\n"
             "  breathe               Autopilot tick (freshen + load + soft prompts)\n"
@@ -161,7 +173,7 @@ def main(argv: list[str] | None = None) -> int:
         # guards, from inside the bundle rather than from the vault.
         rest = argv[1:]
         if not rest:
-            print("hook: name required (twin_session_start, twin_session_end)", file=sys.stderr)
+            print("hook: name required (twin_session_start, twin_session_end, claude-code)", file=sys.stderr)
             return 2
         return _run_hook(rest[0], rest[1:])
 
@@ -205,6 +217,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "init":
         return _cmd_init(argv[1:], root)
+
+    if cmd == "import":
+        return _cmd_import(argv[1:], root)
 
     if cmd == "memory":
         return _cmd_memory(argv[1:], root)
@@ -258,10 +273,11 @@ def _cmd_self(argv: list[str], root: Path) -> int:
             "Usage:\n"
             "  twinaatma self summary [--path People/Self.md]\n"
             "  twinaatma self pending\n"
+            "  twinaatma self review\n"
             "  twinaatma self approve <proposal.md>\n"
             "\n"
-            "'approve' is the only way Self.md can change, and it refuses to run\n"
-            "without an interactive terminal so an agent cannot complete the loop.",
+            "'approve' and 'review' are the only ways Self.md can change, and they refuse\n"
+            "to run without an interactive terminal so an agent cannot complete the loop.",
             file=sys.stderr,
         )
         return 1
@@ -273,6 +289,8 @@ def _cmd_self(argv: list[str], root: Path) -> int:
         return _self_pending(argv[1:])
     if command == "approve":
         return _self_approve(argv[1:])
+    if command == "review":
+        return _self_review(argv[1:])
     print(f"Unknown self subcommand: {command}", file=sys.stderr)
     return 1
 
@@ -346,7 +364,116 @@ def _self_pending(argv: list[str]) -> int:
     return 0
 
 
-def _self_approve(argv: list[str]) -> int:
+_DISCARDED = 3
+
+
+def _self_review(argv: list[str]) -> int:
+    """Walk every waiting proposal once: apply, keep for later, or discard.
+
+    Each decision is the same screen and the same gate as ``self approve``. This only
+    saves the person from typing one command per proposal.
+    """
+    parser = argparse.ArgumentParser(prog="knowledgeos self review")
+    parser.add_argument("--vault", type=Path, default=None)
+    args = parser.parse_args(argv)
+    from knowledgeos.gate import is_real_console, list_open
+
+    if not is_real_console(sys.stdin):
+        print(
+            "Refusing to review without an interactive terminal.\n"
+            "Run this command yourself in a terminal window.",
+            file=sys.stderr,
+        )
+        return 2
+    from knowledgeos.memory import MemoryAPI
+
+    vault = resolve_vault_cli(args.vault)
+    api = MemoryAPI(vault)
+    seen: set[str] = set()
+    counts = {0: 0, 1: 0, _DISCARDED: 0}
+    while True:
+        waiting = [item for item in list_open(vault) if item["path"] not in seen]
+        if not waiting:
+            break
+        current = waiting[0]
+        seen.add(current["path"])
+        siblings = _same_section_drafts(vault, api, current)
+        print(f"\n--- Proposal {len(seen)} ({len(waiting) - 1} more waiting) ---")
+        code, result = _decide_proposal([current["path"], "--vault", str(vault)], offer_discard=True)
+        counts[code if code in counts else 1] += 1
+        if code == 0:
+            _redraft_superseded(api, current["section"], siblings, result.get("superseded") or [])
+    if not seen:
+        print("No Self proposals waiting for you.")
+        return 0
+    print(f"\nApplied {counts[0]}, discarded {counts[_DISCARDED]}, kept for later {counts[1]}.")
+    return 0
+
+
+def _same_section_drafts(vault: Path, api, current: dict) -> dict[str, tuple[str, str] | None]:
+    """Other waiting drafts for the section of ``current``.
+
+    An addition maps to ``(title, added lines)``; a draft that replaces the section maps
+    to None. Applying one change closes every other draft for that section, because each
+    was written against the older text.
+    """
+    from knowledgeos import gate
+    from knowledgeos.parser import split_frontmatter
+
+    found: dict[str, tuple[str, str] | None] = {}
+    for item in gate.list_open(vault):
+        if item["path"] == current["path"] or item["section"] != current["section"]:
+            continue
+        found[item["path"]] = None
+        if item["mode"] != "append":
+            continue
+        described = gate.describe(vault, api.proposals_dir, item["path"])
+        if described.get("error"):
+            continue
+        try:
+            text = (vault / item["path"]).read_text(encoding="utf-8", errors="replace")
+            title = str(split_frontmatter(text)[0].get("title") or "")
+        except OSError:
+            title = ""
+        found[item["path"]] = (title or f"Addition to {item['section']}", described["patch"])
+    return found
+
+
+def _redraft_superseded(api, section: str, siblings: dict[str, tuple[str, str] | None],
+                        superseded: list[str]) -> None:
+    """Draft again each addition that this approval closed, so the person still decides it.
+
+    Only the drafts the gate reports as superseded by this approval. A draft that someone
+    rejected while the screen was open stays rejected.
+    """
+    again = lost = 0
+    for path in superseded:
+        if path not in siblings:
+            lost += 1
+            continue
+        addition = siblings[path]
+        drafted = addition and api.propose_self_update(
+            addition[0], section, addition[1],
+            "Drafted again unchanged. Another change to this section was applied first.", "append",
+        )
+        if drafted and drafted.get("proposal_path"):
+            again += 1
+        else:
+            lost += 1
+    if again:
+        print(f"{again} other addition(s) to this section were drafted again against the new text. "
+              "They come next.")
+    if lost:
+        print(f"{lost} other draft(s) for this section were closed, because they were written against "
+              "the older text. Ask your assistant to propose them again.")
+
+
+def _self_approve(argv: list[str], *, offer_discard: bool = False) -> int:
+    return _decide_proposal(argv, offer_discard=offer_discard)[0]
+
+
+def _decide_proposal(argv: list[str], *, offer_discard: bool = False) -> tuple[int, dict]:
+    """Show one proposal and take the person's answer. ``(exit code, the gate's result)``."""
     parser = argparse.ArgumentParser(prog="knowledgeos self approve")
     parser.add_argument("proposal", help="Path or filename of a proposal in People/Self-Proposals")
     parser.add_argument("--vault", type=Path, default=None)
@@ -363,14 +490,17 @@ def _self_approve(argv: list[str]) -> int:
             "Re-run without --yes.",
             file=sys.stderr,
         )
-        return 2
-    if not sys.stdin.isatty():
+        return 2, {}
+    from knowledgeos.gate import is_real_console
+
+    # `isatty()` is true for the NUL device on Windows; the stream must be a real console.
+    if not is_real_console(sys.stdin):
         print(
             "Refusing to approve without an interactive terminal.\n"
             "Run this command yourself in a terminal window.",
             file=sys.stderr,
         )
-        return 2
+        return 2, {}
 
     from knowledgeos import gate
     from knowledgeos.memory import MemoryAPI
@@ -386,7 +516,7 @@ def _self_approve(argv: list[str]) -> int:
             candidate = matches[0] if len(matches) == 1 else candidate
     if not candidate.exists():
         print(f"Proposal not found: {args.proposal}", file=sys.stderr)
-        return 1
+        return 1, {}
 
     # Everything below comes from the ledger row that `_apply` will act on. The screen
     # used to parse the section and mode out of the proposal file with a scan over the
@@ -399,7 +529,7 @@ def _self_approve(argv: list[str]) -> int:
         hint = described.get("hint")
         if hint:
             print(hint, file=sys.stderr)
-        return 1
+        return 1, {}
     section = described["section"]
     mode = described["mode"]
     patch = described["patch"]
@@ -456,19 +586,28 @@ def _self_approve(argv: list[str]) -> int:
     else:
         prompt = "Apply this to People/Self.md? [y/N] "
         accepted = {"y", "yes"}
+    if offer_discard:
+        prompt = prompt.rstrip() + "  (d discards this draft) "
     try:
         answer = input(prompt).strip().lower()
     except EOFError:
         print()
         print("No answer possible (stdin is closed); nothing applied.")
-        return 1
+        return 1, {}
+    if offer_discard and answer in {"d", "discard"}:
+        result = gate.reject(vault, api.proposals_dir, str(candidate), "Discarded by the owner during review.")
+        if result.get("error"):
+            print(result["error"], file=sys.stderr)
+            return 1, {}
+        print("Discarded. People/Self.md is unchanged.")
+        return _DISCARDED, {}
     if answer not in accepted:
         print("Not applied.")
-        return 1
+        return 1, {}
 
     result = gate.approve_interactive(vault, api.self_path, api.proposals_dir, str(candidate))
     print(json.dumps(result, indent=2))
-    return 0 if result.get("ok") else 1
+    return (0 if result.get("ok") else 1), result
 
 
 def _preview_diff(
@@ -564,6 +703,65 @@ def _cmd_init(argv: list[str], root: Path) -> int:
         return 1
     print(json.dumps(result, indent=2))
     return 0 if result.get("ok", True) else 1
+
+
+def _cmd_import(argv: list[str], root: Path) -> int:
+    parser = argparse.ArgumentParser(
+        prog="twinaatma import",
+        description="Bring in memory from another assistant or from agent files. The source "
+                    "is a text or markdown file, or a folder of them. It is only read.",
+    )
+    parser.add_argument("source", type=Path)
+    parser.add_argument("--label", default="",
+                        help='Where this came from, for example "ChatGPT memory" (default: the file name)')
+    parser.add_argument("--vault", type=Path, default=None)
+    parser.add_argument("--dry-run", action="store_true", help="Count what would be imported; write nothing")
+    parser.add_argument("--no-profile-draft", action="store_true",
+                        help="Do not draft a profile change from lines that read like rules")
+    parser.add_argument("--many-files", action="store_true",
+                        help="Read a folder that holds more than 200 text files")
+    parser.add_argument("--json", dest="as_json", action="store_true", help="Print the report as JSON")
+    args = parser.parse_args(argv)
+
+    from knowledgeos.importer import import_path
+    from knowledgeos.memory import MemoryAPI
+
+    try:
+        vault = require_vault(args.vault)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    report = import_path(MemoryAPI(vault), args.source, args.label or None,
+                         dry_run=args.dry_run, draft_profile=not args.no_profile_draft,
+                         many_files=args.many_files)
+    report.pop("paths", None)
+    if args.as_json:
+        print(json.dumps(report, indent=2))
+    else:
+        for problem in report["problems"]:
+            print(f"Note: {problem}", file=sys.stderr)
+        print(f"Source: {report['label']} ({report['files']} file(s)), {report['found']} memories found.")
+        if args.dry_run:
+            print(f"Dry run: nothing written. {report['rule_like_lines']} line(s) read like rules or preferences.")
+        else:
+            print(f"Imported {report['imported']}. Already present {report['already_present']}. "
+                  f"Withheld by the remembering policy {report['withheld_by_policy']}. Failed {report['failed']}.")
+            if report["left_for_next_run"]:
+                print(f"{report['left_for_next_run']} more were left for the next run. "
+                      "Run the same command again to continue.")
+            if report["profile_draft"]:
+                if report["rule_like_lines"]:
+                    print(f"A profile change with {report['rule_like_lines']} line(s) waits for your decision.")
+                else:
+                    print("The profile change drafted from this source still waits for your decision.")
+                print("Decide it in a terminal:  twinaatma self review")
+            if report["rules_left_for_next_run"]:
+                print(f"{report['rules_left_for_next_run']} more rule-like line(s) are saved as notes but not "
+                      "drafted yet. Run the same command again to draft them.")
+            elif report.get("profile_draft_error"):
+                print(f"No profile change was drafted: {report['profile_draft_error']}")
+    worked = report["found"] > 0 and not report["failed"]
+    return 0 if worked else 1
 
 
 def _cmd_memory(argv: list[str], root: Path) -> int:

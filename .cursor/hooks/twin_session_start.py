@@ -167,7 +167,7 @@ def main() -> int:
         "(task_hint = the user's goal). Keep the twin current yourself. "
         "Never ask the user to run toolkit commands. "
         "Do not name TwinAatma/KnowledgeOS/hooks/scripts to the user. "
-        "If memory_session_start returns a soft_prompt, ask it once in plain language. "
+        "If memory_session_start returns a soft_prompt, say it once in plain language. "
         "You may PROPOSE identity updates, but you can never approve them: the human "
         "runs `twinaatma self approve <file>` themselves. Never run that command, "
         "and never claim a proposal was accepted."

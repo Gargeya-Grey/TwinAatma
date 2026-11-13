@@ -199,8 +199,81 @@ def maybe_propose_weekly_drift(api: Any, state: dict[str, Any]) -> dict[str, Any
     return out
 
 
+_IDENTITY_SECTIONS = ("heuristics", "values", "mental_models", "anti_goals", "active_bets")
+_UNSET_SECTION = "Unknown. No owner-confirmed"
+_SECTION_MARKER = re.compile(r"<!--.*?-->", re.DOTALL)
+ONBOARDING_KEY = "onboarding"
+_ONBOARDING_PROMPT = (
+    "I don't know much about you yet. Want to tell me a few things, like what you work on "
+    "and how you like answers, so I can keep them in mind from now on?"
+)
+_ONBOARDING_STEPS = [
+    "The profile is empty. Ask soft_prompt once. If the person declines, drop it and help "
+    "with their task.",
+    "Save each fact they share with memory_capture.",
+    "Draft their standing rules and preferences with memory_propose_self_update in append "
+    "mode, at most one draft per section.",
+    "Then tell them in one sentence that the drafts wait for their own decision: "
+    "`twinaatma self review` in a terminal decides every draft in one sitting.",
+    "If they keep memory in another assistant, they can bring it in themselves with "
+    "`twinaatma import <file>`.",
+]
+
+
+def profile_is_empty(identity: Any) -> bool:
+    """True while every identity section still holds the text `init` wrote.
+
+    A profile that could not be read is not called empty: the first-run question is for
+    a person nobody has asked yet, not for a file that needs repair.
+    """
+    sections = identity.get("sections") if isinstance(identity, dict) else None
+    if not isinstance(sections, dict) or not sections:
+        return False
+    return not confirmed_sections(identity)
+
+
+def confirmed_sections(identity: Any) -> dict[str, str]:
+    """The identity sections the person has filled, by key, without the section markers.
+
+    The line `init` wrote ("Unknown. No owner-confirmed ...") is left out, not the whole
+    section: an approved addition is appended below that line, and it is the person's.
+    """
+    sections = identity.get("sections") if isinstance(identity, dict) else None
+    confirmed: dict[str, str] = {}
+    for key in _IDENTITY_SECTIONS if isinstance(sections, dict) else ():
+        text = _SECTION_MARKER.sub("", str(sections.get(key) or ""))
+        body = "\n".join(line for line in text.splitlines()
+                         if not line.strip().startswith(_UNSET_SECTION)).strip()
+        if body:
+            confirmed[key] = body
+    return confirmed
+
+
+def has_own_notes(api: Any) -> bool:
+    """True when the vault holds a note of the person's own.
+
+    The starter pages, the templates, undecided drafts and the profile do not count. The
+    first-run question says "I don't know much about you yet". That is false for a
+    person whose vault already holds their notes, so they are not asked. When the index
+    cannot be read, the answer is True: no question is better than a wrong one.
+    """
+    from knowledgeos.search import without_scaffold
+
+    try:
+        conn = api._conn()
+        try:
+            rows = [{"path": str(row[0]), "type": str(row[1] or "")}
+                    for row in conn.execute("SELECT path, type FROM notes")]
+        finally:
+            conn.close()
+    except Exception:  # noqa: BLE001 - any unreadable index means "do not ask"
+        return True
+    return any(row["path"].casefold() != "people/self.md" for row in without_scaffold(rows))
+
+
 def soft_prompt_for_human(
-    ops: dict[str, Any], orphan_unsaved: bool = False, asked: set[str] | None = None
+    ops: dict[str, Any], orphan_unsaved: bool = False, asked: set[str] | None = None,
+    profile_empty: bool = False,
 ) -> tuple[str | None, str | None]:
     """At most one soft question — never chore language or product jargon.
 
@@ -214,8 +287,13 @@ def soft_prompt_for_human(
     props = ops.get("open_proposals") or []
     fresh = [p for p in props if str(p.get("path") or p.get("proposal_path") or "") not in asked]
     if fresh:
+        # Not a question: a yes in chat decides nothing, only the terminal does.
         key = str(fresh[0].get("path") or fresh[0].get("proposal_path") or "")
-        return "Want me to remember that preference going forward?", key
+        count = max(len(props), int(ops.get("open_proposals_count") or 0))
+        waits = ("One change to your profile waits" if count == 1
+                 else f"{count} changes to your profile wait")
+        return (f"{waits} for your decision. Run `twinaatma self review` in a terminal "
+                "when you want to decide."), key
     from knowledgeos.evolution import outcome_review_due
 
     pending = ops.get("due_outcomes", ops.get("pending_outcomes")) or []
@@ -224,7 +302,17 @@ def soft_prompt_for_human(
         title = _plain_excerpt(unstuck[0].get("title") or "that earlier decision")
         key = str(unstuck[0].get("path") or "")
         return f"Quick check — how did “{title}” turn out?", key
+    # Last: the first-run question is the least urgent thing to ask.
+    if profile_empty and ONBOARDING_KEY not in asked:
+        return _ONBOARDING_PROMPT, ONBOARDING_KEY
     return None, None
+
+
+def covered_keys(ops: dict[str, Any], key: str) -> set[str]:
+    """Every key that one prompt answers. The reminder about waiting changes counts them all."""
+    waiting = {str(p.get("path") or p.get("proposal_path") or "")
+               for p in ops.get("open_proposals") or []}
+    return waiting if key in waiting else {key}
 
 
 # Everything that can start a prompt delimiter, fake a role header, or open markup is
@@ -271,6 +359,7 @@ def breathe(api: Any, task_hint: str = "", limit: int = 8, *,
     import uuid
     if source != "prewarm":
         session_id = session_id or uuid.uuid4().hex
+    if session_id is not None:
         validate_session_id(session_id)
     with state_lock(api.vault):
         return _breathe(api, task_hint, limit, source=source, session_id=session_id)
@@ -328,9 +417,12 @@ def _breathe(
         # the human has not changed their mind yet, and asking would be a chore.
         deferred = orphan
     else:
-        soft, soft_key = soft_prompt_for_human(ops, orphan_unsaved=orphan, asked=asked)
+        soft, soft_key = soft_prompt_for_human(
+            ops, orphan_unsaved=orphan, asked=asked,
+            profile_empty=profile_is_empty(ctx.get("self")) and not has_own_notes(api),
+        )
         if soft_key:
-            asked.add(soft_key)
+            asked.update(covered_keys(ops, soft_key))
             state["soft_prompts_asked"] = sorted(asked)
             if soft_key == "orphan":
                 for record in (state.get("sessions") or {}).values():
@@ -373,12 +465,15 @@ def _breathe(
             "Use Self heuristics/values/anti-goals/active bets from context before advising.",
             "Capture important ideas with memory_capture without asking the user to 'save'.",
             "When preferences change, memory_propose_self_update, then tell the human the "
-            "one command to approve it — never edit Self.md and never approve it yourself.",
-            "If soft_prompt is set, ask it once in plain language (no product names).",
+            "one command to approve it — never edit Self.md and never approve it yourself. "
+            "`twinaatma self review` decides every waiting draft in one sitting.",
+            "If soft_prompt is set, say it once in plain language (no product names). It "
+            "is complete as it stands: add nothing from an earlier chat to it.",
             "Near end of useful work, call memory_session_end with a short summary.",
         ],
         "user_experience_rule": (
-            "The human finished setup. Never ask them to run toolkit commands, "
+            "The human finished setup. The one command they ever run is `twinaatma self "
+            "review`, to decide a change to their profile. Never ask them to run a script, "
             "rebuild indexes, or manage cadences. Only help; keep the twin current yourself."
         ),
         "context": ctx,
@@ -393,9 +488,68 @@ def _breathe(
             "index_blocked": ops.get("index_blocked"),
         },
     }
+    if soft_key == ONBOARDING_KEY:
+        payload["onboarding"] = list(_ONBOARDING_STEPS)
     # `session_brief.md` used to be written here and nothing ever read it: a dead file
     # described in the docs as a feature. The payload itself is the brief — it goes
     # straight back to the agent that asked for it.
+    from knowledgeos.memory import STARTUP_CONTEXT_BYTES, _context_bytes
+
+    if ctx.get("error"):
+        payload["error"] = ctx["error"]
+    if _context_bytes(payload) <= STARTUP_CONTEXT_BYTES:
+        return payload
+
+    # These rows are response previews, separate from the full persisted records.
+    unfinished = payload["unfinished_sessions"]
+    total = len(unfinished)
+    if unfinished:
+        preview = {
+            "total_count": total,
+            "omitted_count": total,
+            "truncated_hint_count": 0,
+            "notice": "Partial startup preview. Complete hints and omitted session records remain persisted; omitted sessions are not absent.",
+        }
+        selected = []
+        row_bytes = 0
+        for row in unfinished:
+            hint_bytes = row["task_hint"].encode("utf-8")
+            if len(hint_bytes) > 256:
+                row["task_hint"] = hint_bytes[:256].decode("utf-8", errors="ignore")
+                row["task_hint_truncated"] = True
+                row["task_hint_total_bytes"] = len(hint_bytes)
+            count = len(selected) + 1
+            next_preview = dict(preview, omitted_count=total - count,
+                                truncated_hint_count=preview["truncated_hint_count"]
+                                + bool(row.get("task_hint_truncated")))
+            next_row_bytes = row_bytes + _context_bytes(row)
+            envelope_bytes = _context_bytes({
+                "unfinished_sessions": [], "unfinished_sessions_preview": next_preview,
+            })
+            # Replace the empty JSON array with encoded rows and their commas.
+            if envelope_bytes + next_row_bytes + count - 1 > 2048:
+                break
+            selected.append(row)
+            row_bytes, preview = next_row_bytes, next_preview
+        payload["unfinished_sessions"] = selected
+        payload["unfinished_sessions_preview"] = preview
+        if not preview["omitted_count"] and not preview["truncated_hint_count"]:
+            payload.pop("unfinished_sessions_preview")
+
+    allowance = STARTUP_CONTEXT_BYTES - _context_bytes(dict(payload, context={}))
+    payload["context"] = api._bound_startup_context(ctx, max_bytes=allowance)
+    if payload["context"].get("error"):
+        payload["error"] = payload["context"]["error"]
+    if _context_bytes(payload) > STARTUP_CONTEXT_BYTES:
+        return {
+            "ritual": "breathe", "session_id": session_id,
+            "error": "The startup response cannot fit the context budget. Retrieve the full identity and relevant notes before advising. Session records remain persisted.",
+            "unfinished_sessions": [],
+            "unfinished_sessions_preview": {
+                "total_count": total, "omitted_count": total, "truncated_hint_count": 0,
+                "notice": "All unfinished-session previews and other startup details were omitted. Full session records remain persisted; omitted previews do not establish an empty history.",
+            },
+        }
     return payload
 
 
@@ -446,5 +600,5 @@ REQUIRED every meaningful chat:
 4) End of useful work: memory_session_end with a short summary.
 
 Never ask the user to run python/scripts/rebuild/validate. Speak only about their work — avoid product names unless asked.
-If soft_prompt is present in session_start, ask it once in plain language.
+If soft_prompt is present in session_start, say it once in plain language.
 """

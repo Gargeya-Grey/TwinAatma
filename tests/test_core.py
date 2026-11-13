@@ -183,7 +183,7 @@ class AutopilotTests(TempVaultCase):
         prompt, key = soft_prompt_for_human(
             {"open_proposals": [{"path": "x"}], "pending_outcomes": []}
         )
-        self.assertIn("remember", prompt.lower())
+        self.assertIn("twinaatma self review", prompt)
         self.assertEqual(key, "x")
         # Already asked once: an open proposal must not nag every single chat.
         self.assertEqual(
@@ -2711,6 +2711,9 @@ class GateBoundaryTests(TempVaultCase):
             command,
             shell=True,
             cwd=str(self.vault),
+            # The hook reads its event from standard input. Without this it reads the
+            # test runner's own input, and waits for ever when that stays open.
+            stdin=_subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=180,
@@ -2770,6 +2773,7 @@ class GateBoundaryTests(TempVaultCase):
             commands[0],
             shell=True,
             cwd=str(self.vault),
+            stdin=_subprocess.DEVNULL,
             capture_output=True,
             text=True,
             timeout=180,
@@ -3162,7 +3166,7 @@ class RoundElevenRegressionTests(TempVaultCase):
             shown.append(prompt)
             return answers.pop(0)
 
-        with mock.patch("sys.stdin.isatty", return_value=True), \
+        with mock.patch("knowledgeos.gate.is_real_console", return_value=True), \
                 mock.patch("knowledgeos.gate._require_human_terminal", return_value=None), \
                 mock.patch("builtins.input", side_effect=fake_input), \
                 mock.patch("sys.stdout", new_callable=lambda: __import__("io").StringIO()) as out:
